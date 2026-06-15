@@ -1,0 +1,7 @@
+# chat sidecars + scratch state the skill writes next to a questions file
+.oq/
+*.chats.json
+
+# os / editor noise
+.DS_Store
+node_modules/
