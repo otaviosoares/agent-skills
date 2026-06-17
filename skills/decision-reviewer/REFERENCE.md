@@ -16,6 +16,7 @@ the format from memory.
                                  across the whole file (Q1, Q2, … in order)
 Why line(s).                     plain lines under the heading = the "why" body
 *Affects:* a, b                  optional, one line
+- **In plain terms:** …          optional; plain-language explanation, renders collapsed
 - **Decides:** …                 required
 - **Recommendation:** …          required
 - **Other options:** …           required
@@ -41,6 +42,13 @@ Load-bearing details:
 - **Title states the either/or.** The reader should grasp the choice from the
   title alone: "Stripe Checkout or custom payment form?"
 - **Why = one line.** What breaks or blocks if this stays undecided.
+- **In plain terms** (optional) = the explanation you'd give if the reader clicked
+  "Explain this question": the underlying problem in plain language and what each
+  option means in practice. It renders collapsed, so it costs nothing to scanning
+  but is there for the reader who doesn't get the terse version. You already did
+  the research to write the question — capture that grounding here instead of
+  discarding it. Add it when a question is genuinely hard to grasp cold; skip it
+  when the title and why-line already stand on their own.
 - **Decides** = the thing the answer pins down, not a restatement of the title.
 - **Recommendation** = `Pick: X — <one clause>`. Every recommendation states its
   basis. If you did not verify a claim against the code/docs, prefix it

@@ -21,6 +21,10 @@ multi-sitting review, or when the decision log itself is a deliverable.
    `unverified — `. Fewer well-grounded questions beat exhaustive coverage.
    The UI has a one-click "Use recommendation" button — never put an
    ungrounded recommendation behind it. Style rules: see REFERENCE.md.
+   When a question is hard to grasp cold, capture the plain-language unpacking
+   in an optional `- **In plain terms:**` field (renders collapsed) rather than
+   leaving the reader to click "Explain this question" — you already did the
+   research, so bake that clarity in up front.
 
 2. **Write the questions file.** Copy `TEMPLATE.md` (same dir as this file) and
    fill it in — do not write the format from memory. One file per topic, named

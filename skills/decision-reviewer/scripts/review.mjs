@@ -62,10 +62,10 @@ const root = (() => {
 const reTitle = /^# (.+)$/
 const reSection = /^## (.+)$/
 const reQuestion = /^### (Q\d+)\. (✅ )?(.*)$/
-const reField = /^- \*\*(Decides|Recommendation|Other options):\*\* (.*)$/
+const reField = /^- \*\*(In plain terms|Decides|Recommendation|Other options):\*\* (.*)$/
 const reDecision = /^- \*\*Decision(?: \((\d{4}-\d{2}-\d{2})\))?:\*\* (.*)$/
 
-const FIELD_KEY = { Decides: 'decides', Recommendation: 'recommendation', 'Other options': 'options' }
+const FIELD_KEY = { 'In plain terms': 'gloss', Decides: 'decides', Recommendation: 'recommendation', 'Other options': 'options' }
 
 export function parse(md) {
   const lines = md.split('\n')
@@ -91,7 +91,7 @@ export function parse(md) {
     }
     if ((m = line.match(reQuestion))) {
       if (!section) { section = { name: 'Questions', questions: [] }; st.sections.push(section) }
-      q = { qid: m[1], title: m[3], body: [], affects: '', decides: '', recommendation: '', options: '', decision: '', decisionDate: '', answered: !!m[2] }
+      q = { qid: m[1], title: m[3], body: [], affects: '', gloss: '', decides: '', recommendation: '', options: '', decision: '', decisionDate: '', answered: !!m[2] }
       section.questions.push(q)
       last = null; fieldsSeen = false
       continue
@@ -265,6 +265,7 @@ function chatContext(st, item) {
     '',
     'QUESTION ' + item.qid + ': ' + item.title,
     'WHY: ' + item.body.join(' '),
+    item.gloss ? 'IN PLAIN TERMS: ' + item.gloss.replace(/\n/g, ' ') : '',
     item.affects ? 'AFFECTS: ' + item.affects : '',
     'DECIDES: ' + item.decides,
     'RECOMMENDATION: ' + item.recommendation,
@@ -355,6 +356,12 @@ const HTML = `<!doctype html>
   .rec .lbl { color: var(--green); }
   .opts { color: var(--muted); }
   .opts .lbl { color: var(--amber); }
+  .gloss { margin-top: 8px; border: 1px dashed var(--line); border-radius: 8px; padding: 0 11px; }
+  .gloss summary { cursor: pointer; font-size: 11px; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; color: var(--accent); padding: 7px 0; list-style: none; }
+  .gloss summary::-webkit-details-marker { display: none; }
+  .gloss summary::before { content: "▸ "; }
+  .gloss[open] summary::before { content: "▾ "; }
+  .gloss .gbody { font-size: 13.5px; color: var(--muted); padding-bottom: 10px; }
   .affects { font-size: 12.5px; color: var(--muted); font-style: italic; margin-top: 2px; }
   .decision { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
   .decision textarea { width: 100%; min-height: 64px; resize: vertical; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
@@ -465,6 +472,7 @@ function makeCard(item) {
   var html = '<div class="qhead"><h3><strong>' + esc(item.qid) + '.</strong> ' + mdi(item.title) + '</h3>'
     + '<span class="chip ' + (item.answered ? 'ans">✅ Answered' : 'open">Open') + '</span></div>';
   if (item.body.length) html += '<div class="field why">' + mdi(item.body.join('\\n')) + '</div>';
+  if (item.gloss) html += '<details class="gloss"><summary>In plain terms</summary><div class="gbody">' + mdi(item.gloss) + '</div></details>';
   if (item.affects) html += '<div class="affects">Affects: ' + mdi(item.affects) + '</div>';
   html += fieldHtml('decides', 'Decides', item.decides);
   html += fieldHtml('rec', 'Recommendation', item.recommendation);

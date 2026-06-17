@@ -9,6 +9,7 @@
 ### Q1. {Either/or question title — state the choice in the title?}
 {One line: why this needs a decision now.}
 *Affects:* {areas, files, or other questions this touches — optional line, delete if unused}
+- **In plain terms:** {optional — the plain-language unpacking you'd give if asked to explain this question: what the underlying problem really is and what each option means in practice. Renders collapsed in the UI, so write it for the reader who doesn't yet get the terse version. Delete the line if the question already stands on its own.}
 - **Decides:** {what the answer pins down}
 - **Recommendation:** Pick: {option} — {one clause why; prefix claims you did not verify with "unverified — "}
 - **Other options:** {alternative} — {one tradeoff}. {ruled-out alternative} — {why} (avoid)
