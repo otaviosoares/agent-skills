@@ -155,3 +155,55 @@ DRY=0 node "$KIT"/materialize-github.mjs --batch-data <scope>.json --root <data-
   createIssue: async ({title, bodyFile, body, milestone, labels}) => ({ url, id }),  // required
   placeOnBoard?: async ({url, id, wave, milestone, pkgs, size}) => void }             // optional
 ```
+
+## Source format + `plan` checks (`materialize-plan.mjs`)
+
+The producer reads the data dir; **`plan`** is the offline, zero-dependency engine that *authors* that
+data dir from a friendlier **source tree** and *validates* it before any push. It carries no project IP
+and reuses the producer's exact `slug`/membership rules so the two can't drift.
+
+**Source tree** (`<root>/src/`, conventionally `plans/.tracker/src/`):
+```
+src/
+  issue/<slug>.md     # YAML frontmatter + body. slug = FILENAME (so slug↔bodyFile can't mismatch).
+  milestones.yml      # block seq of `- title:` / `  description:` (scalars only)
+```
+Each `issue/<slug>.md` frontmatter: `title` (req), `labels` (req, ≥1, must include the scope label),
+`milestone` (req — resolved for *all* backends; clickup just no-ops creating it), `deps` (a list of
+**slugs** in this same tree). The body is markdown (Goal + Acceptance criteria) and must **not** contain
+a `## Dependencies` section — `compile` renders that. The frontmatter reader is deliberately tiny
+(scalars + flat/`[a, b]`/block string lists only) and **fails loud** on anything richer.
+
+**compile** lowers `src/` → the producer contract byte-compatibly: `issues-open.json` (`bodyFile =
+bodies/<slug>.md`), `bodies/<slug>.md` (= the body + a rendered **`## Dependencies`** section), and
+`milestones.json`. `created-issues.tsv` is create-if-absent only. It validates the source first and
+refuses to write a dirty result, then re-checks the generated dir.
+
+**The dependency heading is `## Dependencies`** — the one contract shared between what `compile` writes
+and what the runtime PICK step parses (`runbook.template.md` step 2: gate each dep in the body's
+`Dependencies` section on `item-state <id> = closed`). `compile` renders each dep as
+`` - <dep title> (`<dep-slug>`) ``. `check` parses it back, resolving each ref to a slug or title; a
+`#N` ref is treated as an **external** cross-wave dep (an issue already created in an earlier wave) and
+is not flagged as dangling.
+
+**check** is read-only, runs over a compiled OR hand-authored `--root`, and **accumulates every**
+violation (never fail-on-first), exit 0/1:
+
+| check | catches |
+|---|---|
+| bodyFile exists + non-empty | **the DRY footgun** — producer DRY never reads `bodies/`, so a typo'd `bodyFile` only fails at `DRY=0` on the live tracker |
+| milestone resolves (all issues) | an undeclared milestone the producer's core would throw on |
+| slug uniqueness (incl. case-fold) | two issues whose `bodyFile` reduces to the same slug (silent in core; membership/labelFixes key on slug) |
+| ≥1 label; scope selects >0 (if `--scope`) | an issue in no scope, or a no-op materialize run |
+| `deps` resolve | a `Dependencies` ref matching no issue → a runtime dep-gate that never clears |
+| dependency DAG | a cycle that wedges the runtime in permanent `WAIT` (reported, never auto-broken) |
+| `created-issues.tsv` present | the dedupe ledger the producer reads on every run |
+| `labelFixes.only` slugs resolve (if `--batch-data`) | a silent no-op in the producer |
+
+**Mechanical vs judgment** (the safety line): `check` asserts *resolvability* and *acyclicity*
+(mechanical) — it never decides whether the deps are the *right* deps, never authors a body or a
+criterion, and never chooses which edge breaks a cycle. **Pre-creation ID boundary:** `deps` resolve by
+slug/title (the only stable pre-push handle); the runtime gate ultimately keys on issue open/closed
+state. Intra-wave deps reference issues created in the same batch (the orchestrator maps the rendered
+title/slug to the live issue); cross-wave deps to already-created issues use `#N` directly. Editing
+issue titles on the tracker after push can drift this mapping — a documented boundary, not a guarantee.

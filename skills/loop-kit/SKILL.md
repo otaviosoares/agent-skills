@@ -1,6 +1,6 @@
 ---
 name: loop-kit
-description: Set up and run a context-bounded, multi-runner autonomous build loop driven by an issue tracker (GitHub, GitLab, or ClickUp). Use when the user wants to stand up an unattended "wave" build loop on a repo, onboard a repo to loop-kit, generate a loop runbook + tracker config, run or resume the loop, or add a tracker backend. Sub-commands — `init` (onboard a repo, auto-runs first), `config` (edit/add a backend), `run` (launch the loop), `materialize` (stand up a wave's issues). The loop spawns a fresh headless `claude -p` per iteration (flat context), each tracker issue is the lock so N runners never collide, and a backend-agnostic `track` dispatcher seams GitHub, GitLab, and ClickUp (a local-files backend is planned). FAILS LOUD on the per-project judgment blocks (contention/merge recipe, land/lockfile recipe, CI-truth carve-out, review lenses) — never auto-fills or auto-commits them.
+description: Set up and run a context-bounded, multi-runner autonomous build loop driven by an issue tracker (GitHub, GitLab, or ClickUp). Use when the user wants to stand up an unattended "wave" build loop on a repo, onboard a repo to loop-kit, generate a loop runbook + tracker config, run or resume the loop, or add a tracker backend. Sub-commands — `init` (onboard a repo, auto-runs first), `config` (edit/add a backend), `plan` (author a wave's backlog as a source tree, compile + validate it), `run` (launch the loop), `materialize` (stand up a wave's issues). The loop spawns a fresh headless `claude -p` per iteration (flat context), each tracker issue is the lock so N runners never collide, and a backend-agnostic `track` dispatcher seams GitHub, GitLab, and ClickUp (a local-files backend is planned). FAILS LOUD on the per-project judgment blocks (contention/merge recipe, land/lockfile recipe, CI-truth carve-out, review lenses) — never auto-fills or auto-commits them.
 ---
 
 # Loop Kit
@@ -39,10 +39,11 @@ The skill takes a sub-command as its argument (e.g. `loop-kit init`, `loop-kit c
 |---|---|---|
 | **`init`** (default) | Onboard the target repo: probe → confirm a plan → emit `plans/loop.config.sh`, `plans/run-loop.sh`, `plans/wave-loop.md`. **Non-destructive** (keeps any file that already exists). | no |
 | **`config`** | Re-open the config Q&A on an already-onboarded repo: edit values or add a second tracker backend. Touches only `plans/loop.config.sh`; never regenerates the runbook. | no |
+| **`plan`** | Author a wave's backlog as a **source tree** (`plans/.tracker/src/`), then `compile` it into the producer's data dir and `check` it. Bridges `init`→`materialize`. Writes only local files; **facilitates** the human's dep graph + bodies, never invents them (see the `plan` section). | no |
 | **`run`** | Launch/resume the loop via `./plans/run-loop.sh` (see the `run` section). Surfaces the tunables; does not edit files. | yes (builds/lands) |
-| **`materialize`** | Human-gated: run the producer (`materialize-*.mjs`) to stand up a wave's issues from a backlog file (see the `materialize` section). | yes |
+| **`materialize`** | Human-gated: run the producer (`materialize-*.mjs`) to stand up a wave's issues from a backlog file (see the `materialize` section). Gated behind a clean `plan check`. | yes |
 
-**Auto-init guard.** Before honoring `config`, `run`, or `materialize`, check the target repo for
+**Auto-init guard.** Before honoring `config`, `plan`, `run`, or `materialize`, check the target repo for
 `plans/loop.config.sh`. If it's **missing**, the repo isn't onboarded yet — say so and run **`init`
 first**, then continue to the requested command. A bare invocation with no argument also means `init`.
 (`init` itself is safe to re-run: it's non-destructive and just reports what already exists.)
@@ -182,6 +183,43 @@ loop must not run with any remaining. `run-loop.sh` locates the installed skill 
 re-running resumes. The driver tunables (MODEL, EFFORT, MAX_ITERS, WAIT_SECONDS, PERMISSION_MODE, …)
 are documented at the top of `loop-drive.sh`.
 
+## `plan` — author a wave's backlog (the init→materialize bridge)
+
+`init` emits the config + runbook and stops; `materialize` assumes the producer's data dir already
+exists and is correct. **`plan` owns the middle** — turning a project into the producer's input —
+without ever inventing the parts that are the user's domain IP. Engine: `materialize-plan.mjs`
+(offline, zero-dependency), three modes:
+
+1. **scaffold** — `node "$KIT"/materialize-plan.mjs scaffold --root plans/.tracker --scope <label> [--slug <s> …]`
+   lays down a **source tree** at `plans/.tracker/src/`: one `issue/<slug>.md` per issue (YAML
+   frontmatter `{title, labels, milestone, deps:[slugs]}` + a markdown body) and `milestones.yml`.
+   **Interview the human** (AskUserQuestion, same picker `init` uses) for the structural picks you can
+   mechanically own — scope label, milestone set, and per issue `{title, milestone, which existing
+   slugs it depends on}` — and seed the stubs. The body's Goal + Acceptance criteria stay as
+   `<<FILL: … >>` tokens (the exact fail-loud stance the runbook uses). **Never infer a dependency
+   edge** from title similarity, file overlap, or ordering — the human names every edge or there is
+   none. **Never write the Goal/criteria.** Re-run-safe: never overwrites an existing source file.
+2. **compile** — `node "$KIT"/materialize-plan.mjs compile --src plans/.tracker/src --out plans/.tracker`
+   deterministically lowers the source tree into the **exact existing producer contract**
+   (`issues-open.json` + `bodies/<slug>.md` + `milestones.json`), byte-compatible downstream — the
+   producer and the runtime loop change zero lines. `slug = filename`, so the slug↔bodyFile footgun is
+   impossible by construction; the body's `## Dependencies` section (which the runtime PICK step reads)
+   is **rendered** from the typed `deps`, never authored. Refuses to compile if any `<<FILL>>` survives,
+   a body is empty, or `--src == --out`. `created-issues.tsv` is create-if-absent only (it's live state).
+3. **check** — `node "$KIT"/materialize-plan.mjs check --root plans/.tracker [--scope <label>] [--batch-data <f>]`
+   a read-only validator over the producer dir (compiled **or** hand-authored) that accumulates **every**
+   violation and exits non-zero: bodyFile existence (**the DRY footgun** — producer DRY never reads
+   bodies), milestone resolution across all scopes, slug uniqueness (case-fold), scope-label presence,
+   `deps` resolution (dangling refs), and **dependency-cycle / DAG** check. It reports a cycle but
+   **never picks which edge to cut** — that's human judgment.
+
+**Mechanical vs judgment.** `plan` owns the mechanical correctness (slug↔bodyFile, milestone
+resolution, label hygiene, acyclicity); the human owns the judgment (whether the deps are the *right*
+deps, what the acceptance criteria are). The `<<FILL>>` tokens and the "never infer an edge" rule are
+where that line is drawn — same posture as the runbook's 4 judgment blocks. **Hand-authoring escape
+hatch:** a user who prefers writing the producer contract directly skips `compile` and just runs
+`check --root` on their raw dir; the source format is strictly opt-in.
+
 ## `materialize` — advance/create a wave's issues (the producer)
 
 The runtime adapter handles the *running* loop; the **producer** (`materialize-{github,gitlab,clickup}.mjs`,
@@ -190,6 +228,11 @@ It is offline + DRY-by-default. See REFERENCE.md → "Producer". This **mutates 
 human-gated: confirm the backlog file + scope with the user and run it DRY first, then for-real only on
 explicit go-ahead. `init` never runs it. Do NOT author the dependency graph or issue bodies yourself —
 that's the user's domain IP (REFERENCE.md → the `issues-open.json`/`bodies/` contract).
+
+**Blocking precondition.** Before offering `DRY=0`, run `materialize-plan.mjs check --root <data-dir>`
+and require a **clean exit** — same spirit as the no-unresolved-`<<FILL>>` grep gate before `run`. A
+red `check` means the data dir would create broken issues (a missing body, an undeclared milestone, a
+dangling dep, a dependency cycle that wedges the runtime in permanent WAIT) on a **live** tracker.
 
 ## Rules
 
