@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# track — the backend-agnostic tracker dispatcher (loop-kit).
+#
+# WHY: the runbook must not inline `gh` (or `glab`). It calls verbs here, and TRACKER_BACKEND selects
+# which adapter implements them — so swapping GitHub↔GitLab is a config change, not a runbook rewrite
+# (a `local` backend is planned). This is a kit script (like board.sh), NOT a published CLI:
+# no install, no versioning. It runs per-invocation (Claude Code gives each Bash call a fresh shell,
+# so sourced functions wouldn't persist — a dispatcher does).
+#
+# USAGE:  "$LOOP_KIT_DIR"/track <verb> [args…]   (vendored: ./plans/loop-kit/track <verb> [args…])
+#   verbs: caps | sync-list <scope> | runlog-tail [N] | view <id> | item-state <id>
+#          reconcile-mine <scope> | branch-merged <branch> | claim <id> | release <id>
+#          close <id> | mark-review <id> <url> | log <body> | open-pr <branch> <id> | board-done <id>
+#   See the kit's REFERENCE.md (or the project's LOOP-KIT.md) for the contract + capability matrix.
+#
+# CONFIG: the per-repo project config (REPO, RUNLOG, LAND_MODE, …) lives OUTSIDE the kit at
+#   <repo>/plans/loop.config.sh — the kit ships only a sanitized tracker.config.example.sh template.
+#   The driver exports TRACKER_CONFIG to point here; any value is also env-overridable, e.g.:
+#   TRACKER_BACKEND=gitlab LAND_MODE=pr "$LOOP_KIT_DIR"/track caps
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 1) project config (repo slug, run-log handle, land mode, …). env overrides win (config uses :- defaults).
+#    The per-repo config lives OUTSIDE the kit so extracting loop-kit/ to a skill carries no project IP.
+#    Resolution order (first that exists wins):
+#      $TRACKER_CONFIG               — the driver always exports this → <repo>/plans/loop.config.sh
+#      $PWD/plans/loop.config.sh     — call-from-skill, run from the repo root (the common interactive case)
+#      $HERE/../loop.config.sh       — vendored mode (kit lives at <repo>/plans/loop-kit/ → $HERE/.. = plans/)
+#      the kit's tracker.config.example.sh — placeholder fallback, with a LOUD warning
+#    NOTE: in skill mode $HERE is the SKILL dir, so $HERE/../loop.config.sh does NOT point at the repo —
+#    $PWD/plans/loop.config.sh is what resolves the repo config there. (Run `track` from the repo root.)
+CONFIG=""
+for _cand in "${TRACKER_CONFIG:-}" "$PWD/plans/loop.config.sh" "$HERE/../loop.config.sh"; do
+  if [[ -n "$_cand" && -f "$_cand" ]]; then CONFIG="$_cand"; break; fi
+done
+if [[ -n "$CONFIG" ]]; then
+  # shellcheck source=/dev/null
+  source "$CONFIG"
+elif [[ -f "$HERE/tracker.config.example.sh" ]]; then
+  echo "⚠️  no project config found (looked at: \$TRACKER_CONFIG='${TRACKER_CONFIG:-}', \$PWD/plans/loop.config.sh, $HERE/../loop.config.sh)." >&2
+  echo "    Using the kit's PLACEHOLDER tracker.config.example.sh (REPO=owner/repo) — set TRACKER_CONFIG or run from a repo with plans/loop.config.sh." >&2
+  # shellcheck source=/dev/null
+  source "$HERE/tracker.config.example.sh"
+fi
+TRACKER_BACKEND="${TRACKER_BACKEND:-github}"
+
+# 2) the selected backend adapter (defines the cmd_* functions).
+ADAPTER="$HERE/adapters/${TRACKER_BACKEND}.sh"
+[[ -f "$ADAPTER" ]] || { echo "✋ no adapter for TRACKER_BACKEND='$TRACKER_BACKEND' (looked for $ADAPTER)" >&2; exit 3; }
+# shellcheck source=/dev/null
+source "$ADAPTER"
+
+# 3) dispatch verb → cmd_<verb> (kebab-case verb → snake_case function).
+verb="${1:-}"
+[[ -n "$verb" ]] || { echo "✋ usage: $0 <verb> [args…]   (try: $0 caps)" >&2; exit 64; }
+shift
+fn="cmd_${verb//-/_}"
+if ! declare -F "$fn" >/dev/null 2>&1; then
+  echo "✋ unknown verb '$verb' for backend '$TRACKER_BACKEND'." >&2
+  echo "   available: $(declare -F | sed -n 's/^declare -f cmd_//p' | tr '_' '-' | tr '\n' ' ')" >&2
+  exit 64
+fi
+"$fn" "$@"

@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+# adapters/gitlab.sh — the GitLab (glab CLI) tracker adapter.
+#
+# Mirrors adapters/github.sh VERB-FOR-VERB (identical cmd_* names) so the dispatcher and runbook
+# never change — TRACKER_BACKEND=gitlab is the only switch. Project values (REPO, RUNLOG, LAND_MODE,
+# BRANCH_PREFIX) come from plans/loop.config.sh; ./track sources both before dispatch. For a
+# self-hosted instance, export GITLAB_HOST=<host> in the config so glab targets the right server.
+#
+# The lock CONTRACT this adapter satisfies (see LOOP-KIT.md) is IDENTICAL to github.sh — only the
+# MECHANISM differs: of N racing runners exactly one wins, the loser detects it and yields, the lock
+# is owner-releasable, and the claimant id (the glab username) is stable+unique+comparable+crash-
+# surviving. Mechanism: ADDITIVE assignee union (`--assignee +me`, NOT a bare replace which is
+# last-writer-wins and unsafe) + stabilization re-read + lexicographic username-sort tie-break.
+# On Free tier (single-assignee → union impossible), CLAIM_STRATEGY=note falls back to a note-marker
+# CAS with the same arbitration shape (current-round-windowed so undeletable stale markers can't wedge
+# it — see _claim_note). REQUIRES each runner authed as a DISTINCT glab user.
+#
+# DEPENDENCY: jq (glab has no built-in --jq like gh; read verbs pipe `--output json` through jq).
+# Convention: read verbs print to stdout; mutating verbs are quiet unless they return a value
+# (claim → won|lost, open-pr → url, branch-merged/item-state → token). Non-fatal cleanup uses || true.
+
+_glab() { glab "$@" -R "$REPO"; }   # every issue/mr call is repo-scoped (glab resolves host via GITLAB_HOST/remote)
+
+# glab api has no -R; host comes from --hostname or GITLAB_HOST (or the cwd repo's remote). Inject
+# --hostname only when GITLAB_HOST is set, so a cwd-resolved host still works when it isn't.
+_glab_api() {
+  if [[ -n "${GITLAB_HOST:-}" ]]; then glab api --hostname "$GITLAB_HOST" "$@"; else glab api "$@"; fi
+}
+
+# Portable lowercase (bash 3.2 has no ${x,,}; macOS /usr/bin/env bash is 3.2). Honors the
+# case-folded "lexicographic" claimant contract without a bash-4 dependency.
+_lc() { printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'; }
+
+# URL-encode one path segment (for the numeric-id-free projects/<group%2Fproject> form).
+_enc() { printf '%s' "${1:-}" | jq -sRr @uri; }
+
+# Resolve REPO (group/project) → numeric project id, needed for the notes endpoint (glab api takes
+# no -R, so the project must be in the path; the URL-encoded namespaced path is accepted as :id).
+_project_id() { _glab_api "projects/$(_enc "$REPO")" | jq -r '.id'; }
+
+# capabilities — same shape/keys as github so the driver/runbook read it identically.
+cmd_caps() {
+  cat <<EOF
+backend=gitlab
+cross_machine_atomic_claim=true
+can_open_pr=true
+land_modes=merge,pr
+EOF
+}
+
+# SYNC — open work-items in scope, normalized to github's {id,title,labels,assignees,state} shape
+# (id=iid here). Uses the api + --paginate (one array per page → `jq -s add`) so there is NO silent
+# 100-item cap — the analog of github's `--limit 300`. GitLab open state is `opened`, not `open`.
+cmd_sync_list() {
+  local scope="${1:?scope label required, e.g. wave:4}" pid enc
+  pid="$(_project_id)"
+  enc="$(_enc "$scope")"
+  _glab_api --paginate "projects/${pid}/issues?labels=${enc}&state=opened&per_page=100" \
+    | jq -s 'add // [] | [.[] | {iid, title, labels, assignees: [.assignees[].username], state}]'
+}
+
+# Run-log resume trail — last N non-system notes, chronological. sort=desc + first-N + reverse so a
+# run-log with >100 notes still yields the NEWEST N (a naive sort=asc first page would return the
+# OLDEST). System notes (label/assignee events) are excluded — only human entries are the trail.
+cmd_runlog_tail() {
+  local n="${1:-2}" pid
+  pid="$(_project_id)"
+  _glab_api "projects/${pid}/issues/${RUNLOG}/notes?sort=desc&order_by=created_at&per_page=100" \
+    | jq -r "[.[] | select(.system==false)] | .[0:${n}] | reverse | .[].body"
+}
+
+# One item, full — used for the brief, dep parse, contention skip. Aliases description→body and
+# iid→number so a cross-backend consumer reading github's field names still works.
+cmd_view() {
+  _glab issue view "${1:?id required}" --output json \
+    | jq '. + {body: (.description // ""), number: .iid}'
+}
+
+# Item terminal state as a github-parity token (open|closed) — the dep gate. GitLab uses
+# opened/closed; normalize opened→open so the runbook's `== closed` test is backend-neutral.
+cmd_item_state() {
+  local s
+  # Never abort the dispatcher on a transient view failure (parity with github.sh, which emits a bare
+  # pipeline that yields empty): a bare `s=$(pipeline)` under set -e/pipefail would abort, breaking the
+  # runbook's dep-gate compound `[[ $(track item-state X) == closed ]]`. On failure → empty → `*)` arm
+  # echoes empty → the gate reads "not closed" (safe WAIT), exactly like github's tr-on-empty.
+  s="$(_glab issue view "${1:?id required}" --output json 2>/dev/null | jq -r '.state' 2>/dev/null || true)"
+  case "$s" in
+    opened) echo open ;;
+    closed) echo closed ;;
+    *)      _lc "$s" ;;
+  esac
+}
+
+# RECONCILE — my in-progress items in scope (the dangling-claim signal). Repeated --label = AND
+# (scope AND in-progress); --assignee=@me. Both claim strategies leave the WINNER assigned, so this
+# is uniform across strategies. Default state is opened, which is what we want.
+cmd_reconcile_mine() {
+  local scope="${1:?scope label required}"
+  _glab issue list --label "$scope" --label in-progress --assignee=@me --per-page 100 --output json \
+    | jq -c '[.[] | {iid, title, labels, assignees: [.assignees[].username]}]'
+}
+
+# Is a branch already merged into main? backend-neutral, keyed on the BRANCH name — GitLab MR iids
+# (!N) are a DIFFERENT sequence from issue iids (#N), so never grep "Merge #N".
+cmd_branch_merged() {
+  local branch="${1:?branch required}"
+  git fetch origin main -q 2>/dev/null || true   # avoid a stale origin/main → false-negative → needless rebuild
+  # merge-commit / rebase landings (merge mode): the branch tip is an ANCESTOR of main.
+  if git branch -r --merged origin/main 2>/dev/null | grep -q "/${branch}\$"; then
+    echo yes; return 0
+  fi
+  # squash landings (PR mode; tip is NOT an ancestor): ask GitLab whether an MR for this SOURCE BRANCH merged.
+  if _glab mr list --source-branch "$branch" --merged --output json 2>/dev/null | jq -e 'length > 0' >/dev/null 2>&1; then
+    echo yes; return 0
+  fi
+  echo no
+}
+
+# CLAIM (atomic) → prints won|lost. CLAIM_STRATEGY=assignee (default; additive union, needs a
+# multi-assignee tier) | note (Free-tier single-assignee fallback; note-marker CAS).
+cmd_claim() {
+  local id="${1:?id required}" me
+  me="$(_glab_api user 2>/dev/null | jq -r '.username // empty' 2>/dev/null || true)"   # claimant identity; empty → lost (safe)
+  [[ -n "$me" ]] || { echo "✋ cannot resolve glab user (the claim identity) — is glab authed / GITLAB_HOST set?" >&2; echo lost; return 0; }
+  me="$(_lc "$me")"   # case-fold: honor the lexicographic contract (jq sort is by codepoint)
+  if [[ "${CLAIM_STRATEGY:-assignee}" == "note" ]]; then
+    _claim_note "$id" "$me"
+  else
+    _claim_assignee "$id" "$me"
+  fi
+}
+
+# Default CAS: ADDITIVE assignee union + in-progress, stabilize, re-read, winner = smallest username.
+#   `--assignee +me` ADDS without evicting a concurrent racer (a bare `--assignee me` REPLACES =
+#   last-writer-wins = a later claimer could steal an in-progress lock). This is the GitLab analog of
+#   github's `--add-assignee @me`; same best-effort-CAS contract, same PICK-overlap + git-push-reject backstops.
+_claim_assignee() {
+  local id="$1" me="$2" winner
+  # If the add-edit FAILS, release whatever stuck and report lost — never abort mid-claim (that would
+  # leave an orphan in-progress label with no clear winner and print no won|lost for the runbook).
+  if ! _glab issue update "$id" --assignee "+$me" --label in-progress >/dev/null 2>&1; then
+    cmd_release "$id"; echo lost; return 0
+  fi
+  # Stabilize against eventual consistency: a concurrent racer's just-added assignee can lag the read,
+  # so a naive immediate re-read could see only itself and both racers would "win". Sleep so both
+  # re-read a list containing BOTH, then arbitrate: winner = case-folded lexicographically-smallest username.
+  sleep 3
+  # `|| true`: a transient re-read failure → fall to lost+release (recover next iteration) rather than
+  # aborting mid-claim with our assignee still stuck.
+  winner="$(_glab issue view "$id" --output json 2>/dev/null | jq -r '[.assignees[].username | ascii_downcase] | sort | .[0] // ""' 2>/dev/null || true)"
+  if [[ -n "$winner" && "$winner" == "$me" ]]; then
+    echo won
+  else
+    cmd_release "$id"; echo lost
+  fi
+}
+
+# Free-tier fallback CAS: in-progress label + a `claimed by <user>` note marker, stabilize, re-read the
+# claim markers, winner = case-folded smallest claimant (computed identically by every racer, so the
+# result is consistent regardless of post order — same shape as github's login-sort). The winner then
+# takes the single assignee slot so reconcile-mine finds it.
+#   ACCRETION HAZARD (notes are not deletable): a released/crashed loser's marker LINGERS forever, so a
+#   naive global lexicographic-min would re-elect a DEPARTED smallest-name ghost on every later round →
+#   zero winners, item permanently wedged. We therefore arbitrate only over the CURRENT round's cohort:
+#   the racers all post within seconds of one PICK (after the sleep both are visible), so we keep only
+#   claim markers within NOTE_CLAIM_WINDOW seconds of the newest claim marker and pick the smallest in
+#   THAT cohort. Stale markers from prior cycles (minutes/hours older) fall outside the window and can't win.
+#   pid is resolved BEFORE any mutation and guarded: if the notes endpoint is unreachable we yield cleanly
+#   (echo lost, nothing posted) rather than aborting mid-claim under set -e after stamping label+note.
+_claim_note() {
+  local id="$1" me="$2" winner pid window="${NOTE_CLAIM_WINDOW:-120}"
+  pid="$(_project_id 2>/dev/null || true)"
+  if [[ -z "$pid" ]]; then echo lost; return 0; fi   # can't arbitrate without the notes endpoint → yield; nothing stamped
+  if ! _glab issue update "$id" --label in-progress >/dev/null 2>&1; then cmd_release "$id"; echo lost; return 0; fi
+  if ! _glab issue note "$id" -m "claimed by $me" >/dev/null 2>&1; then cmd_release "$id"; echo lost; return 0; fi
+  sleep 3
+  winner="$(_glab_api "projects/${pid}/issues/${id}/notes?per_page=100" 2>/dev/null \
+    | jq -r --argjson w "$window" '
+        [ .[]
+          | select(.system==false)
+          | select(.body | test("^claimed by "))
+          | { u: (.body | capture("^claimed by (?<u>\\S+)") | .u | ascii_downcase),
+              t: (.created_at | sub("\\.[0-9]+";"") | fromdateiso8601) } ]
+        | if length==0 then "" else (max_by(.t) | .t) as $newest
+          | [ .[] | select(.t >= ($newest - $w)) | .u ] | sort | .[0] // "" end
+      ' 2>/dev/null || true)"
+  if [[ -n "$winner" && "$winner" == "$me" ]]; then
+    _glab issue update "$id" --assignee "$me" >/dev/null 2>&1 || true   # winner takes the lone assignee slot → reconcile-mine handle
+    echo won
+  else
+    cmd_release "$id"; echo lost
+  fi
+}
+
+# Release my claim (lost race / abort). Additive remove of my assignee (`!me`, not a bare replace) +
+# unlabel in-progress. `!` prefix (not `-me`, which the flag parser could read as an option) removes me.
+# glab needs the username to remove just MYSELF (no `@me` removal token; `--unassign` would evict the
+# WINNER too on a lost-race release). So if identity can't be resolved, leave the claim FULLY intact
+# (assignee + in-progress) — reconcile-mine keys on in-progress, so a half-release that drops only the
+# label would hide a still-assigned item from the dangling-claim sweep. Intact-and-retried > invisible.
+cmd_release() {
+  local id="${1:?id required}" me
+  me="$(_glab_api user 2>/dev/null | jq -r '.username // empty' 2>/dev/null || true)"
+  if [[ -z "$me" ]]; then
+    echo "ℹ️  release: could not resolve glab user — leaving claim intact for RECONCILE to retry" >&2
+    return 0
+  fi
+  _glab issue update "$id" --assignee "!$me" --unlabel in-progress >/dev/null 2>&1 || true
+}
+
+# CLOSE — terminal, merge-mode. Close FIRST (the terminal op); if it fails and aborts, the issue stays
+# OPEN, still assigned + in-progress, so RECONCILE re-finds and re-closes it. De-labelling first would
+# hide a stranded-but-merged issue from reconcile-mine (which filters on the in-progress label).
+cmd_close() {
+  local id="${1:?id required}"
+  _glab issue close "$id"
+  _glab issue update "$id" --unlabel in-progress >/dev/null 2>&1 || true
+}
+
+# PR-mode handoff — keep the issue OPEN + assigned so PICK skips it and dependents WAIT for a human merge.
+cmd_mark_review() {
+  local id="${1:?id required}" url="${2:-}"
+  _glab issue update "$id" --unlabel in-progress --label in-review >/dev/null
+  if [[ -n "$url" ]]; then _glab issue note "$id" -m "MR opened: ${url} — awaiting human merge." >/dev/null || true; fi
+}
+
+# LOG — append one run-log entry (arg or stdin). Refuse empty (no blank note, no stdin hang on a tty).
+cmd_log() {
+  local body="${1:-}"
+  if [[ -z "$body" && ! -t 0 ]]; then body="$(cat)"; fi
+  if [[ -z "$body" ]]; then echo "✋ log: empty entry (pass a body arg or pipe content)" >&2; return 64; fi
+  _glab issue note "$RUNLOG" -m "$body" >/dev/null
+}
+
+# Open an MR for the built branch (PR/MR mode), print its web_url. Idempotent + fail-loud.
+cmd_open_pr() {
+  local branch="${1:?branch required}" id="${2:?id required}" url
+  # Idempotent: a prior interrupted run may already have opened the MR — return its url, don't double-create.
+  url="$(_glab mr view "$branch" --output json 2>/dev/null | jq -r '.web_url // empty' 2>/dev/null || true)"
+  if [[ -n "$url" ]]; then echo "$url"; return 0; fi
+  # FAIL LOUD on a push failure: otherwise the caller marks the issue in-review with NO MR, parking it
+  # and its dependents forever. Return non-zero + no url so the runbook treats it as a build failure.
+  if ! git push -u origin "$branch" >/dev/null 2>&1; then
+    echo "✋ open-pr: failed to push '$branch' to origin" >&2; return 1
+  fi
+  _glab mr create --source-branch "$branch" --target-branch main --yes \
+    --title "#${id} — ${branch}" \
+    --description "Automated build for #${id}. CI green; awaiting human review/merge." >/dev/null 2>&1 \
+    || _glab mr create --source-branch "$branch" --target-branch main --fill --yes >/dev/null 2>&1 || true
+  url="$(_glab mr view "$branch" --output json 2>/dev/null | jq -r '.web_url // empty' 2>/dev/null || true)"
+  if [[ -z "$url" ]]; then echo "✋ open-pr: MR did not open for '$branch'" >&2; return 1; fi
+  echo "$url"
+}
+
+# Board projection — convenience only; the loop reads NOTHING from the board. No-op (GitLab boards are
+# label-driven, so closing/labeling already moves the card).
+cmd_board_done() { :; }

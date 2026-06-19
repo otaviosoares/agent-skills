@@ -35,6 +35,18 @@ Best for ~6+ decisions with real tradeoffs; for one or two quick questions your
 agent should just ask inline. See the [skill README](skills/decision-reviewer)
 for the format and workflow.
 
+### [loop-kit](skills/loop-kit)
+
+Set up and run a context-bounded, multi-runner autonomous build loop driven by
+an issue tracker (GitHub or GitLab). A stateless driver spawns a fresh headless
+`claude -p` per iteration, so context never fills up — all state lives on the
+tracker, and each tracker issue is the lock so N runners never collide. A
+backend-agnostic `track` dispatcher seams GitHub/GitLab/local. Invoke it on a
+repo to `init` it (emit the tracker config + a loop runbook + a launcher); the
+4 per-project judgment blocks are left as fail-loud `<<FILL>>` tokens and nothing
+is ever auto-committed. See the [skill README](skills/loop-kit) and
+[REFERENCE.md](skills/loop-kit/REFERENCE.md).
+
 ## License
 
 [MIT](LICENSE)
