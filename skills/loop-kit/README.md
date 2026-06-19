@@ -16,6 +16,8 @@ calls verbs, never `gh`/`glab`/`curl` directly. (A `local`-files backend is desi
 - `track` + `adapters/{github,gitlab,clickup}.sh` — the backend-agnostic tracker dispatcher.
 - `materialize-core.mjs` + `materialize-{github,gitlab,clickup}.mjs` — the offline producer that stands
   up a scope's issues on the tracker from a backlog file.
+- `materialize-plan.mjs` + `plan.template/` — the `plan` engine: scaffold a wave's backlog as a source
+  tree, `compile` it into the producer's data dir, and `check` it (the init→materialize bridge).
 - `tracker.config.example.sh` — the per-repo config template (copied in as `plans/loop.config.sh`).
 - `run-loop.template.sh` — the human launcher (copied in as `plans/run-loop.sh`).
 - `runbook.template.md` — the loop runbook template (the SYNC→…→FINISH state machine + verb calls,
@@ -50,10 +52,14 @@ Invoke the skill on a target repo with a sub-command:
   and emit `plans/loop.config.sh`, `plans/run-loop.sh`, and a `plans/wave-loop.md` runbook. Non-destructive
   (keeps any file that already exists). Then resolve the `<<FILL>>` judgment tokens by hand and commit.
 - **`config`** — edit values or add a tracker backend on an already-onboarded repo (rewrites only the config).
+- **`plan`** — author a wave's backlog as a source tree (`plans/.tracker/src/`), then compile + validate
+  it into the producer's data dir. Bridges `init`→`materialize`; scaffolds and checks the dependency
+  graph + bodies but never authors them.
 - **`run`** — launch/resume the loop (`./plans/run-loop.sh`).
-- **`materialize`** — human-gated producer run that stands up a wave's issues from a backlog file.
+- **`materialize`** — human-gated producer run that stands up a wave's issues from a backlog file (gated
+  behind a clean `plan check`).
 
-If you invoke `config`/`run`/`materialize` before the repo is onboarded, the skill runs `init` first.
+If you invoke `config`/`plan`/`run`/`materialize` before the repo is onboarded, the skill runs `init` first.
 See [SKILL.md](SKILL.md). The contract (verbs, the lock guarantees, the capability matrix, the
 producer) is in [REFERENCE.md](REFERENCE.md).
 

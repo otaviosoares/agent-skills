@@ -1,0 +1,9 @@
+# plan.template/src/milestones.yml — the milestone declaration for the source tree.
+# A worked SHAPE, no project IP (like tracker.config.example.sh). `loop-kit plan` compiles this into
+# milestones.json. Every `milestone:` an issue references MUST be declared here (all backends — the
+# producer's core resolves each milestone title; the clickup backend just no-ops creating them).
+# Format is intentionally tiny: a block sequence of `- title:` / `  description:` maps, scalars only.
+- title: Foundation
+  description: Shared scaffolding the rest of the scope builds on.
+- title: Features
+  description: User-facing slices that depend on the foundation.

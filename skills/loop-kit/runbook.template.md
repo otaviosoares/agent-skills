@@ -222,12 +222,19 @@ the issue. Per-item state lives on the individual issues; the run-log is the chr
 ---
 
 ## Advancing the scope (human-gated, not part of the loop)
-Generating the next scope's issues is a separate, human-gated step (the producer, `materialize-*.mjs`):
-1. Compute the frontier (which unopened items now have every dep closed) and stamp them with the next
-   scope label via your generator. **The dependency graph + issue bodies are hand-authored domain IP —
-   the loop-kit skill does not author them.**
-2. Author the scope's backlog data file `{ "scope": "<next scope>", "labelFixes": [ … ] }`, then create
-   the delta: `KIT="$(./plans/run-loop.sh --print-kit-dir)"; source plans/loop.config.sh && DRY=1 node
-   "$KIT"/materialize-github.mjs --batch-data <scope>.json --root <data-dir>` to rehearse, then `DRY=0`.
-   (GitLab: `materialize-gitlab.mjs`, `TRACKER_BACKEND=gitlab`, set `GITLAB_HOST`.)
-3. Create the scope's run-log issue, update this runbook's *Scope* block, and re-launch the loop.
+Generating the next scope's issues is a separate, human-gated step. Author it with `loop-kit plan`,
+then push it with the producer (`materialize-*.mjs`):
+1. **Author the backlog** as a source tree — `loop-kit plan` (engine `materialize-plan.mjs`): scaffold
+   `plans/.tracker/src/issue/<slug>.md` for the next scope's items, fill each Goal + Acceptance criteria,
+   and name every dependency edge in the frontmatter `deps:` list. **The dependency graph + issue bodies
+   are hand-authored domain IP — the loop-kit skill does not author them**, it only scaffolds + validates.
+2. **Compile + check:** `KIT="$(./plans/run-loop.sh --print-kit-dir)";
+   node "$KIT"/materialize-plan.mjs compile --src plans/.tracker/src --out plans/.tracker &&
+   node "$KIT"/materialize-plan.mjs check --root plans/.tracker --scope "<next scope>"`. A clean `check`
+   is the precondition for the next step (it catches a missing body, an undeclared milestone, a dangling
+   dep, or a dependency cycle *before* the live tracker is touched).
+3. **Push the delta:** author `{ "scope": "<next scope>", "labelFixes": [ … ] }`, then
+   `source plans/loop.config.sh && DRY=1 node "$KIT"/materialize-github.mjs --batch-data <scope>.json
+   --root plans/.tracker` to rehearse, then `DRY=0`. (GitLab: `materialize-gitlab.mjs`,
+   `TRACKER_BACKEND=gitlab`, set `GITLAB_HOST`. ClickUp: `materialize-clickup.mjs`.)
+4. Create the scope's run-log issue, update this runbook's *Scope* block, and re-launch the loop.
