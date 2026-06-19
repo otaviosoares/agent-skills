@@ -44,10 +44,18 @@ For ClickUp the code can live on any git host — ClickUp is only the tracker.
 
 ## Use it
 
-Invoke the skill on a target repo to **`init`** it: auto-detect the backend, emit `plans/loop.config.sh`,
-`plans/run-loop.sh`, and a `plans/wave-loop.md` runbook — then resolve the `<<FILL>>` judgment tokens
-by hand and commit. See [SKILL.md](SKILL.md). The contract (verbs, the lock guarantees, the capability
-matrix, the producer) is in [REFERENCE.md](REFERENCE.md).
+Invoke the skill on a target repo with a sub-command:
+
+- **`init`** (default, auto-runs if the repo isn't onboarded) — probe the repo, confirm a write-plan,
+  and emit `plans/loop.config.sh`, `plans/run-loop.sh`, and a `plans/wave-loop.md` runbook. Non-destructive
+  (keeps any file that already exists). Then resolve the `<<FILL>>` judgment tokens by hand and commit.
+- **`config`** — edit values or add a tracker backend on an already-onboarded repo (rewrites only the config).
+- **`run`** — launch/resume the loop (`./plans/run-loop.sh`).
+- **`materialize`** — human-gated producer run that stands up a wave's issues from a backlog file.
+
+If you invoke `config`/`run`/`materialize` before the repo is onboarded, the skill runs `init` first.
+See [SKILL.md](SKILL.md). The contract (verbs, the lock guarantees, the capability matrix, the
+producer) is in [REFERENCE.md](REFERENCE.md).
 
 > **Safety:** the loop runs `bypassPermissions` and, in `merge` mode, pushes to `main` unattended. The
 > skill never auto-fills the judgment blocks, never authors the dependency graph, and never

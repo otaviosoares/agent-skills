@@ -1,6 +1,6 @@
 ---
 name: loop-kit
-description: Set up and run a context-bounded, multi-runner autonomous build loop driven by an issue tracker (GitHub, GitLab, or ClickUp). Use when the user wants to stand up an unattended "wave" build loop on a repo, onboard a repo to loop-kit, generate a loop runbook + tracker config, run or resume the loop, or add a tracker backend. The loop spawns a fresh headless `claude -p` per iteration (flat context), each tracker issue is the lock so N runners never collide, and a backend-agnostic `track` dispatcher seams GitHub, GitLab, and ClickUp (a local-files backend is planned). FAILS LOUD on the per-project judgment blocks (contention/merge recipe, land/lockfile recipe, CI-truth carve-out, review lenses) — never auto-fills or auto-commits them.
+description: Set up and run a context-bounded, multi-runner autonomous build loop driven by an issue tracker (GitHub, GitLab, or ClickUp). Use when the user wants to stand up an unattended "wave" build loop on a repo, onboard a repo to loop-kit, generate a loop runbook + tracker config, run or resume the loop, or add a tracker backend. Sub-commands: `init` (onboard a repo — auto-runs first), `config` (edit/add a backend), `run` (launch the loop), `materialize` (stand up a wave's issues). The loop spawns a fresh headless `claude -p` per iteration (flat context), each tracker issue is the lock so N runners never collide, and a backend-agnostic `track` dispatcher seams GitHub, GitLab, and ClickUp (a local-files backend is planned). FAILS LOUD on the per-project judgment blocks (contention/merge recipe, land/lockfile recipe, CI-truth carve-out, review lenses) — never auto-fills or auto-commits them.
 ---
 
 # Loop Kit
@@ -28,6 +28,24 @@ This skill does two things:
 > Read **[REFERENCE.md](REFERENCE.md)** for the verb contract, the lock contract (the 4 guarantees
 > every backend must satisfy), the capability matrix, and the producer (`materialize-*`) contract.
 > The runbook is generated from **[runbook.template.md](runbook.template.md)**.
+
+---
+
+## Commands
+
+The skill takes a sub-command as its argument (e.g. `loop-kit init`, `loop-kit config`). Route on it:
+
+| command | what it does | mutates the tracker? |
+|---|---|---|
+| **`init`** (default) | Onboard the target repo: probe → confirm a plan → emit `plans/loop.config.sh`, `plans/run-loop.sh`, `plans/wave-loop.md`. **Non-destructive** (keeps any file that already exists). | no |
+| **`config`** | Re-open the config Q&A on an already-onboarded repo: edit values or add a second tracker backend. Touches only `plans/loop.config.sh`; never regenerates the runbook. | no |
+| **`run`** | Launch/resume the loop via `./plans/run-loop.sh` (see the `run` section). Surfaces the tunables; does not edit files. | yes (builds/lands) |
+| **`materialize`** | Human-gated: run the producer (`materialize-*.mjs`) to stand up a wave's issues from a backlog file (see the `materialize` section). | yes |
+
+**Auto-init guard.** Before honoring `config`, `run`, or `materialize`, check the target repo for
+`plans/loop.config.sh`. If it's **missing**, the repo isn't onboarded yet — say so and run **`init`
+first**, then continue to the requested command. A bare invocation with no argument also means `init`.
+(`init` itself is safe to re-run: it's non-destructive and just reports what already exists.)
 
 ---
 
@@ -70,9 +88,25 @@ The runtime layout is identical in both modes (`track`, `loop-drive.sh`, `adapte
 
 ## `init` — onboard a target repo
 
-Run from the target repo. Two tiers; do tier 1 fully, then tier 2.
+Run from the target repo. The flow is **probe → confirm → emit**: auto-detect everything you can,
+present ONE summary of exactly what will be written (and with which values), and ask the user only
+where a value is genuinely ambiguous or unsafe to assume. **Never overwrite an existing file** — for
+each target, if it already exists, keep it and report `kept existing <path>` instead of writing.
 
-### Tier 1 — the mechanical, safe scaffold (do this confidently)
+### Step 0 — probe + plan (silent)
+Gather the detectable facts, then assemble a write-plan. Detect the backend, the multi-runner claim
+strategy, and sensible defaults; mark anything you had to guess as *needs-confirm*.
+
+### Step 1 — confirm (one summary, ask only on ambiguity)
+Show the user a compact summary: detected backend + host, the `LAND_MODE` you'll default to, the
+delivery mode, which of `loop.config.sh` / `run-loop.sh` / `wave-loop.md` are new vs. already present,
+and the `<<FILL>>` tokens that will remain. Then ask — via the AskUserQuestion picker, with our real
+options — ONLY the questions whose answers you couldn't safely infer. Typical ambiguous ones:
+`LAND_MODE` (`pr` vs `merge`), delivery mode (call-from-skill vs scaffold-a-copy), and — when the
+remote is unrecognized or the user named ClickUp — the backend itself. If everything was unambiguous,
+skip straight to emit after the confirmation summary.
+
+### Step 2 — emit (Tier 1: mechanical, safe — do confidently)
 1. **Probe the repo.** Read the git remote (`git remote get-url origin`) and detect the backend:
    - `github.com` → `TRACKER_BACKEND=github`.
    - a GitLab host (`gitlab.com` or self-hosted) → `TRACKER_BACKEND=gitlab` + `GITLAB_HOST=<host>`.
@@ -99,7 +133,10 @@ Run from the target repo. Two tiers; do tier 1 fully, then tier 2.
    - **scaffold-a-copy:** ALSO copy the kit's runtime files into `plans/loop-kit/` and point the
      runbook at `./plans/loop-kit/track` (see "Two delivery modes").
 
-### Tier 2 — the runbook (the dangerous part — fail loud)
+> Each emit step writes only if the target is **absent**. If `plans/loop.config.sh` /
+> `plans/run-loop.sh` already exist, keep them and report `kept existing …` — `init` is re-run-safe.
+
+### Step 3 — emit (Tier 2: the runbook — the dangerous part, fail loud)
 4. **Emit the runbook** `plans/wave-loop.md` (or `<loop>.md`) from
    [`runbook.template.md`](runbook.template.md). Keep the SYNC→RECONCILE→PICK→CLAIM→BUILD→REVIEW→
    LAND→CLOSE→LOG→FINISH state machine and the `"$LOOP_KIT_DIR"/track` verb calls intact.
@@ -120,7 +157,17 @@ Run from the target repo. Two tiers; do tier 1 fully, then tier 2.
 
 ---
 
-## Running the loop (once onboarded)
+## `config` — edit values or add a backend (already-onboarded repo)
+
+Use when the repo already has `plans/loop.config.sh` and the user wants to change something (flip
+`LAND_MODE`, switch `CLAIM_STRATEGY`, point at a different `RUNLOG`) or **add a second tracker
+backend**. Read the existing config, show the current values, and ask only what's changing (the
+AskUserQuestion picker, our real options). Rewrite **only** `plans/loop.config.sh`; never regenerate
+`plans/wave-loop.md` (the runbook holds hand-resolved `<<FILL>>` judgment — regenerating it would
+clobber that). After writing, re-run the wiring check from "Always" to confirm `backend=` is right.
+**Never auto-commit.**
+
+## `run` — launch/resume the loop (once onboarded)
 
 ```bash
 ./plans/run-loop.sh plans/wave-loop.md                       # default LAND_MODE from loop.config.sh
@@ -128,17 +175,21 @@ LAND_MODE=pr ./plans/run-loop.sh plans/wave-loop.md          # open PRs instead 
 TRACKER_BACKEND=gitlab ./plans/run-loop.sh plans/wave-loop.md
 ```
 
-`run-loop.sh` locates the installed skill and exec's `loop-drive.sh`, which exports `LOOP_KIT_DIR`
-(this dir) + `TRACKER_CONFIG` (the repo's `plans/loop.config.sh`) into each spawned session. Stop
-with Ctrl-C anytime — state is external, so re-running resumes. The driver tunables (MODEL, EFFORT,
-MAX_ITERS, WAIT_SECONDS, PERMISSION_MODE, …) are documented at the top of `loop-drive.sh`.
+Before launching, confirm there are **no unresolved `<<FILL>>` tokens** in the runbook (grep it) — the
+loop must not run with any remaining. `run-loop.sh` locates the installed skill and exec's
+`loop-drive.sh`, which exports `LOOP_KIT_DIR` (this dir) + `TRACKER_CONFIG` (the repo's
+`plans/loop.config.sh`) into each spawned session. Stop with Ctrl-C anytime — state is external, so
+re-running resumes. The driver tunables (MODEL, EFFORT, MAX_ITERS, WAIT_SECONDS, PERMISSION_MODE, …)
+are documented at the top of `loop-drive.sh`.
 
-## Advancing/creating a wave's issues (the producer)
+## `materialize` — advance/create a wave's issues (the producer)
 
-The runtime adapter handles the *running* loop; the **producer** (`materialize-{github,gitlab}.mjs`,
+The runtime adapter handles the *running* loop; the **producer** (`materialize-{github,gitlab,clickup}.mjs`,
 driven by `materialize-core.mjs`) stands up a scope's issues on the tracker from a backlog file.
-It is offline + DRY-by-default. See REFERENCE.md → "Producer". `init` never runs it (it mutates the
-tracker); it's a human-gated step.
+It is offline + DRY-by-default. See REFERENCE.md → "Producer". This **mutates the tracker**, so it is
+human-gated: confirm the backlog file + scope with the user and run it DRY first, then for-real only on
+explicit go-ahead. `init` never runs it. Do NOT author the dependency graph or issue bodies yourself —
+that's the user's domain IP (REFERENCE.md → the `issues-open.json`/`bodies/` contract).
 
 ## Rules
 
