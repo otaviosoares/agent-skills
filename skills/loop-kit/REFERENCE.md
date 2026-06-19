@@ -41,10 +41,12 @@ runbook's `"$LOOP_KIT_DIR"/track` calls always hit the first branch. **Interacti
 `TRACKER_CONFIG` — otherwise it falls through to the placeholder `REPO=owner/repo`. Every config value
 is `${VAR:-default}` so an env override always wins.
 
-`loop.config.sh` keys: `TRACKER_BACKEND` (github|gitlab — `local` is a planned backend, no adapter
-shipped yet), `LAND_MODE` (merge|pr), `REPO`,
+`loop.config.sh` keys: `TRACKER_BACKEND` (github|gitlab|clickup — `local` is a planned backend, no
+adapter shipped yet), `LAND_MODE` (merge|pr), `REPO`,
 `RUNLOG`, `WAVE` (default scope label), `BRANCH_PREFIX`, `CLAIM_STRATEGY` (gitlab: assignee|note),
-and the optional github `GH_PROJECT*`/`GH_FIELD_*` board block (producer only).
+the optional github `GH_PROJECT*`/`GH_FIELD_*` board block (producer only), and the clickup
+`CLICKUP_TOKEN`/`CLICKUP_LIST_ID`/`CLICKUP_STATUS_DONE`/`CLICKUP_API` block (clickup uses `CLICKUP_LIST_ID`
+as the tracker unit in place of `REPO`, scope/labels are space tags, and `RUNLOG` is a task id).
 
 ## Verbs (the stable interface)
 
@@ -82,6 +84,11 @@ comparable claimant id that survives a crash** (so RECONCILE finds a dangling cl
 - **GitLab** — same, but assignment must be the **additive `+` union** (a bare replace is
   last-writer-wins and unsafe); single-assignee tiers (Free / many self-hosted) → `CLAIM_STRATEGY=note`
   (note-marker CAS, current-round time-windowed to exclude stale ghost claims).
+- **ClickUp** — same additive-union shape (`{"assignees":{"add":[id]}}`; ClickUp is natively
+  multi-assignee, so there is no single-assignee fallback to worry about), re-read after a stabilization
+  delay, winner = **numerically-smallest assignee id** (the claimant id is the stable numeric ClickUp
+  user id). Needs **N distinct CLICKUP_TOKENs** (one per user). Backstopped, like the others, by the
+  PICK contention-overlap skip and git's non-fast-forward push rejection at LAND.
 - **local** *(planned — `adapters/local.sh` not shipped yet)* — kernel `mkdir`/`O_EXCL` (same host,
   true mutex) or `git push` non-fast-forward rejection (distributed CAS). **REFUSED:** cross-machine
   local over a bare shared FS (NFS/SMB/Dropbox/iCloud/Syncthing) — atomicity isn't guaranteed; the
@@ -89,15 +96,20 @@ comparable claimant id that survives a crash** (so RECONCILE finds a dangling cl
 
 ## Capability matrix
 
-Shipped backends: **github**, **gitlab**. `local` is designed (below) but has no adapter yet.
+Shipped backends: **github**, **gitlab**, **clickup**. `local` is designed (below) but has no adapter yet.
 
 ```
 backend          atomic-lock            cross-machine multi-runner    open-PR   deps
 github (gh)      yes (login-sort CAS)   yes (N distinct logins)       yes       issue-body dep list / title convention
 gitlab (glab)    yes (additive-+ CAS)   yes (N distinct users)        yes (MR)  native blocked_by links (stronger)
+clickup (curl)   yes (id-sort CAS)      yes (N distinct tokens)       NO        task-body dep list (ClickUp hosts no code)
 local (planned)  mkdir/O_EXCL or        same-host-N, or cross-machine no        native deps:[id] frontmatter
                  git-push rejection     ONLY via a git remote (=server)
 ```
+
+ClickUp is a tracker, not a code host: `branch-merged` is git-only and `open-pr` fails loud, so the
+clickup backend supports **`LAND_MODE=merge` only** (the git push to the base branch still happens
+against whatever code host — GitHub/GitLab/etc — the repo's `origin` points at).
 
 ## LAND_MODE
 
@@ -133,6 +145,8 @@ DRY=0 node "$KIT"/materialize-github.mjs --batch-data <scope>.json --root <data-
   and optionally places each issue on a Projects-v2 board (the `GH_PROJECT*`/`GH_FIELD_*` env block;
   unset → no-op). gitlab creates via `glab issue create --description` (labels auto-create;
   milestones do NOT → it list+POSTs the missing ones), no board (GitLab boards are label-driven).
+  clickup creates via `POST /list/{id}/task` (tags = the label analog, attached on create; no board —
+  ClickUp board views are status/tag-driven), milestones are a documented no-op (ClickUp has none).
 
 ### Backend interface (to add a backend)
 ```

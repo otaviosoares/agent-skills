@@ -1,6 +1,6 @@
 ---
 name: loop-kit
-description: Set up and run a context-bounded, multi-runner autonomous build loop driven by an issue tracker (GitHub or GitLab). Use when the user wants to stand up an unattended "wave" build loop on a repo, onboard a repo to loop-kit, generate a loop runbook + tracker config, run or resume the loop, or add a tracker backend. The loop spawns a fresh headless `claude -p` per iteration (flat context), each tracker issue is the lock so N runners never collide, and a backend-agnostic `track` dispatcher seams GitHub and GitLab (a local-files backend is planned). FAILS LOUD on the per-project judgment blocks (contention/merge recipe, land/lockfile recipe, CI-truth carve-out, review lenses) — never auto-fills or auto-commits them.
+description: Set up and run a context-bounded, multi-runner autonomous build loop driven by an issue tracker (GitHub, GitLab, or ClickUp). Use when the user wants to stand up an unattended "wave" build loop on a repo, onboard a repo to loop-kit, generate a loop runbook + tracker config, run or resume the loop, or add a tracker backend. The loop spawns a fresh headless `claude -p` per iteration (flat context), each tracker issue is the lock so N runners never collide, and a backend-agnostic `track` dispatcher seams GitHub, GitLab, and ClickUp (a local-files backend is planned). FAILS LOUD on the per-project judgment blocks (contention/merge recipe, land/lockfile recipe, CI-truth carve-out, review lenses) — never auto-fills or auto-commits them.
 ---
 
 # Loop Kit
@@ -17,8 +17,8 @@ tiers, and the whole point is that **context never fills up**:
 
 **Each tracker issue is the lock**, so two (or N) people can run the same loop on separate machines
 without colliding. A backend-agnostic dispatcher `track <verb>` hides whether the tracker is GitHub
-(`gh`) or GitLab (`glab`) — the runbook calls verbs, never `gh`/`glab` directly. (A `local`-files
-backend is designed in REFERENCE.md but ships no adapter yet.)
+(`gh`), GitLab (`glab`), or ClickUp (`curl` against the REST API) — the runbook calls verbs, never the
+underlying CLI/API directly. (A `local`-files backend is designed in REFERENCE.md but ships no adapter yet.)
 
 This skill does two things:
 1. **`init`** — onboard a target repo: emit its tracker config + a loop runbook + a launcher.
@@ -79,7 +79,12 @@ Run from the target repo. Two tiers; do tier 1 fully, then tier 2.
      If the instance is **single-assignee** (GitLab Free / many self-hosted tiers can't multi-assign),
      default `CLAIM_STRATEGY=note` (the note-marker CAS) — `assignee` strategy silently breaks
      multi-runner there. When unsure, prefer `note` and say why.
-   - no recognizable remote → ask.
+   - **ClickUp is NOT derivable from the git remote** (the code host and the tracker are decoupled — the
+     repo can live on any `origin`). Select `TRACKER_BACKEND=clickup` only when the user says so, and
+     fill the `CLICKUP_TOKEN`/`CLICKUP_LIST_ID`/`CLICKUP_STATUS_DONE` block instead of `REPO`. ClickUp
+     hosts no code → it supports `LAND_MODE=merge` only; if the user wants `pr`, say it's unavailable
+     there. Each runner needs a **distinct `CLICKUP_TOKEN`** for multi-runner.
+   - no recognizable remote → ask (it may be a ClickUp-tracked repo on an unrecognized host).
 2. **Emit `plans/loop.config.sh`** from [`tracker.config.example.sh`](tracker.config.example.sh).
    Prompt for / fill: `REPO` (owner/name or group/project), `RUNLOG` (the run-log issue handle —
    may not exist yet; note it), `BRANCH_PREFIX`, `LAND_MODE` (`merge` = autonomous push to main;
@@ -141,5 +146,6 @@ tracker); it's a human-gated step.
   code or bypass a supply-chain gate if wrong, and the loop runs unattended.
 - **Never auto-commit** anything this skill emits.
 - **Never run the loop mid-extraction or with unresolved `<<FILL>>` tokens.**
-- Multi-runner needs **N distinct tracker logins** (github) or a single-assignee-safe
-  `CLAIM_STRATEGY=note` (gitlab Free). One shared login → degrade to single-runner and say so.
+- Multi-runner needs **N distinct tracker logins** (github / clickup — one token per user) or a
+  single-assignee-safe `CLAIM_STRATEGY=note` (gitlab Free). One shared login → degrade to single-runner
+  and say so.

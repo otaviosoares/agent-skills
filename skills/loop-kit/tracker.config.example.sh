@@ -11,18 +11,20 @@
 # Every value uses ${VAR:-default} so an env override always wins, e.g.:
 #   TRACKER_BACKEND=gitlab LAND_MODE=pr ./plans/run-loop.sh plans/wave-loop.md
 
-# Which backend adapter to load: github | gitlab  (must match the kit's adapters/<backend>.sh;
+# Which backend adapter to load: github | gitlab | clickup  (must match the kit's adapters/<backend>.sh;
 # a `local` backend is planned but ships no adapter yet — selecting it fails loud).
 export TRACKER_BACKEND="${TRACKER_BACKEND:-github}"
 
 # Landing policy: merge = merge to main unattended (autonomous); pr = open a PR/MR + hand off to a human.
+# NOTE: clickup hosts no code → it supports merge ONLY (can_open_pr=false). LAND_MODE=pr fails loud there.
 export LAND_MODE="${LAND_MODE:-merge}"
 
-# Repo / owner slug for the server backends (github: owner/name; gitlab: group/project). Local: unused.
+# Repo / owner slug for the server backends (github: owner/name; gitlab: group/project). clickup/local: unused.
 export REPO="${REPO:-owner/repo}"
 
-# The per-wave run-log handle the adapter resolves (github issue number / gitlab issue iid / local file path).
-export RUNLOG="${RUNLOG:-<run-log issue#/iid/file>}"
+# The per-wave run-log handle the adapter resolves
+# (github issue number / gitlab issue iid / clickup task id / local file path).
+export RUNLOG="${RUNLOG:-<run-log issue#/iid/task-id/file>}"
 
 # Default queue scope label (the runbook usually passes this explicitly; this is the fallback).
 export WAVE="${WAVE:-wave:1}"
@@ -34,6 +36,18 @@ export BRANCH_PREFIX="${BRANCH_PREFIX:-<prefix>}"
 # GitLab-only: claim mechanism. assignee = additive-+ assignee union (needs a paid multi-assignee tier);
 # note = note-marker CAS fallback for Free tier (single assignee). Ignored by other backends.
 export CLAIM_STRATEGY="${CLAIM_STRATEGY:-assignee}"
+
+# ── ClickUp (REST API v2; TRACKER_BACKEND=clickup) ──────────────────────────────────────────────
+# ClickUp has no official CLI — the adapter curls the API with a raw `pk_…` personal token. The tracker
+# unit is a LIST (not owner/repo); scope/labels are space TAGS; open|closed is the status TYPE. ClickUp
+# is natively multi-assignee, so the default assignee-union claim is always safe (no `note` fallback
+# needed). REQUIRES each runner authed as a DISTINCT user (a distinct CLICKUP_TOKEN) for multi-runner.
+# export CLICKUP_TOKEN="${CLICKUP_TOKEN:-pk_xxx}"          # personal token (raw, in the Authorization header)
+# export CLICKUP_LIST_ID="${CLICKUP_LIST_ID:-}"           # the list whose tasks are the loop queue (the REPO analog)
+# export CLICKUP_STATUS_DONE="${CLICKUP_STATUS_DONE:-closed}"  # the done/closed status NAME `close` sets (its type must be closed/done)
+# export CLICKUP_API="${CLICKUP_API:-https://api.clickup.com/api/v2}"  # override for an enterprise/self-managed endpoint
+# PRECONDITION: create the `in-progress` and `in-review` tags in the space once (the runtime attaches
+# existing space tags). RUNLOG above = a ClickUp TASK id whose comments are the run-log.
 
 # ── GitHub Projects-v2 board (OPTIONAL; github producer only) ───────────────────────────────────
 # materialize-github.mjs places each created issue on a board and sets fields. These ids are

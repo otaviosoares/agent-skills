@@ -1,24 +1,46 @@
 # loop-kit
 
 Set up and run a **context-bounded, multi-runner autonomous build loop** driven by an issue tracker
-(GitHub or GitLab).
+(GitHub, GitLab, or ClickUp).
 
 The loop spawns a **fresh headless `claude -p` per iteration**, so context never fills up — all
 durable state lives on the tracker (issues, labels, a run-log), and each fresh session re-derives it.
 **Each tracker issue is the lock**, so N people can run the same loop on separate machines without
-colliding. A backend-agnostic dispatcher `track <verb>` seams GitHub (`gh`) and GitLab (`glab`) — the
-runbook calls verbs, never `gh`/`glab` directly. (A `local`-files backend is designed but not yet shipped.)
+colliding. A backend-agnostic dispatcher `track <verb>` seams GitHub (`gh`), GitLab (`glab`), and
+ClickUp (`curl` against the ClickUp REST API v2 — there is no official ClickUp CLI) — the runbook
+calls verbs, never `gh`/`glab`/`curl` directly. (A `local`-files backend is designed but not yet shipped.)
 
 ## What's in here
 
 - `loop-drive.sh` — the stateless external driver (spawns a fresh session per iteration).
-- `track` + `adapters/{github,gitlab}.sh` — the backend-agnostic tracker dispatcher.
-- `materialize-core.mjs` + `materialize-{github,gitlab}.mjs` — the offline producer that stands up a
-  scope's issues on the tracker from a backlog file.
+- `track` + `adapters/{github,gitlab,clickup}.sh` — the backend-agnostic tracker dispatcher.
+- `materialize-core.mjs` + `materialize-{github,gitlab,clickup}.mjs` — the offline producer that stands
+  up a scope's issues on the tracker from a backlog file.
 - `tracker.config.example.sh` — the per-repo config template (copied in as `plans/loop.config.sh`).
 - `run-loop.template.sh` — the human launcher (copied in as `plans/run-loop.sh`).
 - `runbook.template.md` — the loop runbook template (the SYNC→…→FINISH state machine + verb calls,
   with the 4 per-project judgment blocks left as fail-loud `<<FILL>>` tokens).
+
+## What each adapter needs
+
+Every backend also needs **`git`** (the loop builds branches and lands them; `branch-merged` is git-based).
+For ClickUp the code can live on any git host — ClickUp is only the tracker.
+
+- **github** — the `gh` CLI, authed (`gh auth login`). No `jq` (gh has a built-in `--jq`). Config:
+  `REPO=owner/name`. Multi-runner: each runner authed as a DISTINCT `gh` login (the assignee is the lock).
+  Supports `LAND_MODE` `merge` AND `pr` (can open PRs). Producer `materialize-github.mjs` needs `gh` + Node.
+- **gitlab** — the `glab` CLI, authed, PLUS `jq` (glab has no built-in jq filter, so read verbs pipe
+  through `jq`). Self-hosted: set `GITLAB_HOST=<host>`. Config: `REPO=group/project`. Multi-runner: N
+  distinct `glab` users; on GitLab Free / single-assignee instances set `CLAIM_STRATEGY=note` (the
+  note-marker CAS). Supports `merge` AND `pr` (MRs). Producer `materialize-gitlab.mjs` needs `glab` + `jq` + Node.
+- **clickup** — NO CLI exists, so `curl` + `jq` + a personal token `CLICKUP_TOKEN` (the raw `pk_…` value,
+  sent in the Authorization header). The tracker unit is a ClickUp LIST: set `CLICKUP_LIST_ID` (in place
+  of `REPO`). Scope/labels are space TAGS; open|closed is the task STATUS TYPE; `close` sets the status
+  named by `CLICKUP_STATUS_DONE` (default `closed`). `RUNLOG` is a ClickUp TASK id whose comments are the
+  run-log. PRECONDITION: create the `in-progress` and `in-review` tags in the space once. Multi-runner:
+  each runner needs a DISTINCT `CLICKUP_TOKEN`. ClickUp hosts no code, so it supports **`LAND_MODE=merge`
+  ONLY** (`can_open_pr=false`; `open-pr` fails loud). Producer `materialize-clickup.mjs` needs Node 18+
+  (uses global `fetch`) + `CLICKUP_TOKEN` + `CLICKUP_LIST_ID`.
 
 ## Use it
 
