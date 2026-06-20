@@ -10,19 +10,26 @@
 #   is stateless; it only decides *when to fire the next session* and *when to stop*.
 #
 # USAGE   (run from the TARGET repo's root — the repo whose loop you are driving)
-#   "$LOOP_KIT_DIR"/loop-drive.sh <runbook> [extra inline context …]
+#   "$LOOP_KIT_DIR"/loop-drive.sh [runbook] [extra inline context …]
 #
 #   Most repos add a thin committed launcher (e.g. plans/run-loop.sh) that locates the installed
-#   loop-kit skill and exec's THIS script, so a human just types `./plans/run-loop.sh <runbook>`.
-#   The ONLY required input is a runbook the agent should follow. Everything loop-specific lives in
-#   that runbook + the repo's plans/loop.config.sh — there is no per-loop config script. Examples:
-#     ./plans/run-loop.sh plans/wave-loop.md
-#     ./plans/run-loop.sh plans/013-loop.md "Only pick keystone issues this run."
-#   Advancing a wave? Edit the runbook's Scope block — don't make a new script.
+#   loop-kit skill and exec's THIS script, so a human just types `./plans/run-loop.sh`.
+#   The runbook is OPTIONAL: with no runbook arg the driver defaults RUNBOOK to the kit's canonical
+#   SKELETON (loop-runbook.md, alongside this script) — a backend/project-neutral state machine that
+#   reads the repo's ~stable per-project judgment from plans/loop.recipes.md ($LOOP_RECIPES). The per-wave
+#   scope lives in plans/loop.scope.md (## TARGET/## KEYSTONES, $LOOP_SCOPE) + WAVE in plans/loop.config.sh —
+#   there is no per-loop script. Examples:
+#     ./plans/run-loop.sh                                   # default: the kit's skeleton + loop.recipes.md
+#     ./plans/run-loop.sh "Only pick keystone issues this run."   # skeleton + extra inline context
+#     ./plans/run-loop.sh plans/custom-loop.md              # an explicit, non-default runbook
+#   Advancing a wave? Bump WAVE in loop.config.sh + edit ## TARGET/## KEYSTONES in loop.scope.md.
 #
-#   The driver derives the TARGET repo from the CWD and exports LOOP_KIT_DIR (this dir) +
-#   TRACKER_CONFIG (the repo's plans/loop.config.sh) into each spawned session, so the runbook's
-#   "$LOOP_KIT_DIR"/track verb calls resolve against the right repo's config.
+#   The driver derives the TARGET repo from the CWD and exports into each spawned session: LOOP_KIT_DIR
+#   (this dir), TRACKER_CONFIG (the repo's plans/loop.config.sh), LOOP_RECIPES (the repo's
+#   plans/loop.recipes.md), LOOP_SCOPE (the repo's plans/loop.scope.md), and — by sourcing the config —
+#   WAVE / BRANCH_PREFIX (and the rest of the config). The skeleton's "$LOOP_KIT_DIR"/track verb calls
+#   then resolve against the right repo's config, and its "$WAVE"/"$BRANCH_PREFIX"/$LOOP_RECIPES/$LOOP_SCOPE
+#   references resolve too.
 #
 #   Watch:  the live feed prints each iteration's tool calls; or `tail -f` the log path below.
 #   Stop:   Ctrl-C  (safe — state is external; just re-run to resume).
@@ -65,14 +72,13 @@
 
 set -uo pipefail
 
-# ── args: runbook (required) + optional extra inline context ───────────────────────────────
-RUNBOOK="${1:-}"
-if [[ -z "$RUNBOOK" ]]; then
-  echo "✋ Usage: $0 <runbook> [extra inline context …]   e.g. $0 plans/wave-loop.md" >&2
-  exit 64
-fi
-shift
-EXTRA_CONTEXT="$*"
+# ── args: runbook (OPTIONAL) + optional extra inline context ────────────────────────────────
+# The runbook defaults to the kit's canonical SKELETON (loop-runbook.md, next to this script) so the
+# common case is a bare `./plans/run-loop.sh`. $1 is taken as an explicit runbook ONLY when it names a
+# real file (after we cd into the repo root, below); a non-file first arg (or none) means "use the
+# skeleton" and $1 is treated as extra inline context. We can't test the file yet (we cd below), so
+# defer the runbook-vs-context decision until after the repo root + SCRIPT_DIR are known.
+ARG1="${1:-}"
 
 # ── locate the TARGET repo from the CWD; locate the KIT from this script ────────────────────
 # In skill mode the kit lives OUTSIDE the target repo (installed under ~/.claude/skills/…), so the
@@ -82,15 +88,39 @@ EXTRA_CONTEXT="$*"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT" || { echo "✋ Could not cd into repo root '$REPO_ROOT'" >&2; exit 1; }
-[[ -f "$RUNBOOK" ]] || { echo "✋ Runbook not found: $RUNBOOK (looked under $REPO_ROOT)" >&2; exit 64; }
 
-# Export the two vars the spawned `claude -p` inherits (and so do the agent's Bash tool calls), so the
-# runbook can call "$LOOP_KIT_DIR/track …" and `track` finds the TARGET repo's config:
-#   LOOP_KIT_DIR   = this kit dir (where track + adapters/ + materialize-* live)
+# Resolve the runbook now that we're in the repo root: an explicit first arg that names a real file is
+# the runbook (then drop it from the positional args so the rest is extra context); otherwise default to
+# the kit's SKELETON and keep ALL positional args as extra context.
+DEFAULT_RUNBOOK="$SCRIPT_DIR/loop-runbook.md"
+if [[ -n "$ARG1" && -f "$ARG1" ]]; then
+  RUNBOOK="$ARG1"; shift
+else
+  RUNBOOK="$DEFAULT_RUNBOOK"
+fi
+EXTRA_CONTEXT="$*"
+[[ -f "$RUNBOOK" ]] || { echo "✋ Runbook not found: $RUNBOOK (looked under $REPO_ROOT; default skeleton is $DEFAULT_RUNBOOK)" >&2; exit 64; }
+
+# Export the vars the spawned `claude -p` inherits (and so do the agent's Bash tool calls), so the
+# runbook can call "$LOOP_KIT_DIR/track …", `track` finds the TARGET repo's config, and the skeleton
+# can read the per-repo recipes + scope:
+#   LOOP_KIT_DIR   = this kit dir (where track + adapters/ + materialize-* + loop-runbook.md live)
 #   TRACKER_CONFIG = the target repo's filled config, kept OUTSIDE the kit (so no project IP ships in it).
-# An explicit pre-set TRACKER_CONFIG wins (e.g. a non-standard config path).
+#   LOOP_RECIPES   = the target repo's plans/loop.recipes.md (the ~stable per-repo judgment the skeleton applies).
+#   LOOP_SCOPE     = the target repo's plans/loop.scope.md (the per-wave TARGET/KEYSTONES scope sections).
+# An explicit pre-set TRACKER_CONFIG / LOOP_RECIPES / LOOP_SCOPE wins (e.g. a non-standard path).
 export LOOP_KIT_DIR="$SCRIPT_DIR"
 export TRACKER_CONFIG="${TRACKER_CONFIG:-$REPO_ROOT/plans/loop.config.sh}"
+export LOOP_RECIPES="${LOOP_RECIPES:-$REPO_ROOT/plans/loop.recipes.md}"
+export LOOP_SCOPE="${LOOP_SCOPE:-$REPO_ROOT/plans/loop.scope.md}"
+
+# Source the config into the REAL env so WAVE / BRANCH_PREFIX (and the rest) are available to the
+# spawned session's bash calls — the skeleton's verb calls pass "$WAVE" and branch as "$BRANCH_PREFIX/…".
+# `set -a` exports everything the config sets; every config value uses ${VAR:-default}, so a pre-set env
+# value (e.g. WAVE=wave:6 on this launch) still WINS — sourcing respects it rather than clobbering it.
+# (The CLAIM_STRATEGY preflight below still sources in a SUBSHELL for its own read; this is the one that
+# exports into the driver's real environment.)
+[[ -f "$TRACKER_CONFIG" ]] && { set -a; . "$TRACKER_CONFIG"; set +a; }
 
 # ── preflight: CLAIM_STRATEGY=note requires a per-agent RUNNER_ID — fail at LAUNCH, not mid-iteration ──
 # Resolve the effective strategy the way `track` will (env wins; else the config's default), by sourcing
@@ -102,8 +132,8 @@ if [[ "$_resolved_strategy" == "note" && -z "${RUNNER_ID:-}" ]]; then
   echo "✋ CLAIM_STRATEGY=note requires a per-agent RUNNER_ID, set on THIS launch (not in loop.config.sh," >&2
   echo "   so two concurrent agents differ). It must be STABLE across restarts and DISTINCT per agent —" >&2
   echo "   a downed agent reups with the same id to recover its own claim. Launch each agent like:" >&2
-  echo "     RUNNER_ID=agent-1 $0 $RUNBOOK" >&2
-  echo "     RUNNER_ID=agent-2 $0 $RUNBOOK" >&2
+  echo "     RUNNER_ID=agent-1 ./plans/run-loop.sh" >&2
+  echo "     RUNNER_ID=agent-2 ./plans/run-loop.sh" >&2
   exit 1
 fi
 

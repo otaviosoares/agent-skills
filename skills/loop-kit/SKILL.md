@@ -1,6 +1,6 @@
 ---
 name: loop-kit
-description: Set up and run a context-bounded, multi-runner autonomous build loop driven by an issue tracker (GitHub, GitLab, or ClickUp). Use when the user wants to stand up an unattended "wave" build loop on a repo, onboard a repo to loop-kit, generate a loop runbook + tracker config, run or resume the loop, or add a tracker backend. Sub-commands — `init` (onboard a repo, auto-runs first), `config` (edit/add a backend), `plan` (author a wave's backlog as a source tree, compile + validate it), `run` (launch the loop), `materialize` (stand up a wave's issues). The loop spawns a fresh headless `claude -p` per iteration (flat context), each tracker issue is the lock so N runners never collide, and a backend-agnostic `track` dispatcher seams GitHub, GitLab, and ClickUp (a local-files backend is planned). FAILS LOUD on the per-project judgment blocks (contention/merge recipe, land/lockfile recipe, CI-truth carve-out, review lenses) — never auto-fills or auto-commits them.
+description: Set up and run a context-bounded, multi-runner autonomous build loop driven by an issue tracker (GitHub, GitLab, or ClickUp). Use when the user wants to stand up an unattended "wave" build loop on a repo, onboard a repo to loop-kit, generate a loop runbook + tracker config, run or resume the loop, migrate an old runbook into recipes + scope, or add a tracker backend. Sub-commands — `init` (onboard a repo, auto-runs first), `config` (edit/add a backend), `plan` (author a wave's backlog as a source tree, compile + validate it), `migrate` (lift a stale runbook copy into loop.recipes.md + loop.scope.md), `run` (launch the loop), `materialize` (stand up a wave's issues). The runbook is a shared SKELETON (loop-runbook.md, in the skill, symlinked + auto-updating) plus two per-repo files the skeleton applies by name: loop.recipes.md (5 ~stable per-repo judgment sections) and loop.scope.md (2 per-wave scope sections). The loop spawns a fresh headless `claude -p` per iteration (flat context), each tracker issue is the lock so N runners never collide, and a backend-agnostic `track` dispatcher seams GitHub, GitLab, and ClickUp (a local-files backend is planned). FAILS LOUD on the per-project judgment sections (contention/merge recipe, land/lockfile recipe, CI-truth carve-out, review lenses) — never auto-fills or auto-commits them.
 ---
 
 # Loop Kit
@@ -21,13 +21,34 @@ without colliding. A backend-agnostic dispatcher `track <verb>` hides whether th
 underlying CLI/API directly. (A `local`-files backend is designed in REFERENCE.md but ships no adapter yet.)
 
 This skill does two things:
-1. **`init`** — onboard a target repo: emit its tracker config + a loop runbook + a launcher.
-2. **bundles the runtime** — `loop-drive.sh`, `track`, `adapters/*.sh`, `materialize-*.mjs` — that
-   the onboarded repo calls.
+1. **`init`** — onboard a target repo: emit its tracker config + a launcher + a per-repo **recipes**
+   file + a per-wave **scope** file, and point it at the kit's shared runbook **skeleton**.
+2. **bundles the runtime** — `loop-drive.sh`, `track`, `adapters/*.sh`, `loop-runbook.md`,
+   `materialize-*.mjs` — that the onboarded repo references (symlinked, so updates propagate).
+
+### The runbook = a shared SKELETON (code) + per-repo RECIPES + per-wave SCOPE (config)
+The loop runbook is split into a shared skeleton and two repo files:
+- **[loop-runbook.md](loop-runbook.md)** — the canonical **skeleton**: the backend/project-neutral
+  SYNC→RECONCILE→PICK→CLAIM→BUILD→REVIEW→LAND→CLOSE→LOG→FINISH state machine. It lives **in the skill**
+  and is **symlinked** into each onboarded repo (exactly like `track`/`adapters/`/`loop-drive.sh`), so a
+  skeleton fix propagates to every repo automatically — there is no per-repo copy to go stale. The driver
+  defaults `RUNBOOK` to this file, so `./plans/run-loop.sh` (no runbook arg) uses it.
+- **`plans/loop.recipes.md`** — the **~stable per-repo judgment**, as 5 labeled `## SECTION`s
+  (CONTENTION, BUILD-CONSTRAINTS, REVIEW-LENSES, LAND, CI-TRUTH). The driver exports it as `$LOOP_RECIPES`;
+  `init` emits it from **[recipes.template.md](recipes.template.md)**.
+- **`plans/loop.scope.md`** — the **per-wave scope**, as 2 labeled `## SECTION`s (TARGET, KEYSTONES),
+  rewritten each wave. The driver exports it as `$LOOP_SCOPE`; `init` emits it from
+  **[scope.template.md](scope.template.md)**.
+  The skeleton references every section by name with a `RECIPE → ## NAME` marker (naming the file) and
+  applies it **verbatim**. The kit **NEVER auto-fills** any of them (fail loud).
+- **PIN the skeleton for reproducibility** the same way you pin `adapters/` — the symlink/checkout is the
+  knob. To freeze the skeleton at a known version, vendor the kit into `./plans/loop-kit/` (delivery mode
+  "scaffold-a-copy") or install a pinned skill version; then a skeleton change won't move under a running
+  wave until you re-vendor/re-pin.
 
 > Read **[REFERENCE.md](REFERENCE.md)** for the verb contract, the lock contract (the 4 guarantees
-> every backend must satisfy), the capability matrix, and the producer (`materialize-*`) contract.
-> The runbook is generated from **[runbook.template.md](runbook.template.md)**.
+> every backend must satisfy), the capability matrix, the config/env resolution, and the producer
+> (`materialize-*`) contract.
 
 ---
 
@@ -37,9 +58,10 @@ The skill takes a sub-command as its argument (e.g. `loop-kit init`, `loop-kit c
 
 | command | what it does | mutates the tracker? |
 |---|---|---|
-| **`init`** (default) | Onboard the target repo: probe → confirm a plan → emit `plans/loop.config.sh`, `plans/run-loop.sh`, `plans/wave-loop.md`. **Non-destructive** (keeps any file that already exists). | no |
-| **`config`** | Re-open the config Q&A on an already-onboarded repo: edit values or add a second tracker backend. Touches only `plans/loop.config.sh`; never regenerates the runbook. | no |
+| **`init`** (default) | Onboard the target repo: probe → confirm a plan → emit `plans/loop.config.sh`, `plans/run-loop.sh`, `plans/loop.recipes.md`, `plans/loop.scope.md`. Points the repo at the kit's shared **skeleton** (`loop-runbook.md`) — no per-repo runbook copy. **Non-destructive** (keeps any file that already exists). | no |
+| **`config`** | Re-open the config Q&A on an already-onboarded repo: edit values or add a second tracker backend. Touches only `plans/loop.config.sh`; never regenerates the recipes. | no |
 | **`plan`** | Author a wave's backlog as a **source tree** (`plans/.tracker/src/`), then `compile` it into the producer's data dir and `check` it. Bridges `init`→`materialize`. Writes only local files; **facilitates** the human's dep graph + bodies, never invents them (see the `plan` section). | no |
+| **`migrate`** | One-time: lift the per-repo judgment out of a STALE materialized runbook (`plans/wave-loop.md`, a copy from before the skeleton/recipes split) into `plans/loop.recipes.md` (5 ~stable sections) + `plans/loop.scope.md` (2 per-wave sections). Non-destructive (refuses to clobber either); **fails loud** on any block it can't place. Engine `migrate.mjs` (see the `migrate` section). | no |
 | **`run`** | Launch/resume the loop via `./plans/run-loop.sh` (see the `run` section). Surfaces the tunables; does not edit files. | yes (builds/lands) |
 | **`materialize`** | Human-gated: run the producer (`materialize-*.mjs`) to stand up a wave's issues from a backlog file (see the `materialize` section). Gated behind a clean `plan check`. | yes |
 
@@ -53,10 +75,13 @@ first**, then continue to the requested command. A bare invocation with no argum
 ## What this skill does NOT do (the irreducible per-project IP)
 
 The loop runs `bypassPermissions` and, in `merge` mode, **pushes to `main` unattended**. A
-confidently-wrong auto-generated runbook is therefore **more dangerous than a blank one**. So:
+confidently-wrong recipe is therefore **more dangerous than a blank one**. So:
 
-- **Never auto-fill the 4 judgment blocks.** The runbook template leaves them as visible
-  `<<FILL: …>>` tokens that a human must confirm. They are NOT inferable from the repo:
+- **Never auto-fill the judgment recipes.** `plans/loop.recipes.md` holds 5 ~stable per-repo judgment
+  sections and the sibling `plans/loop.scope.md` holds the 2 per-wave scope sections (`## TARGET`,
+  `## KEYSTONES`). `recipes.template.md` / `scope.template.md` leave all of them as visible `<<FILL: …>>`
+  tokens a human must confirm; the skeleton STOPs with `LOOP_STATUS=BLOCKED` if a referenced section is
+  missing or still carries a `<<FILL>>`. The four dangerous recipe ones are NOT inferable from the repo:
   1. **Contention axes / merge recipe** — which files are merge hotspots and the per-file
      resolution rule (e.g. "new `schema-<domain>.ts` + barrel union-merge"; regenerate generated
      files like a route tree or a lockfile).
@@ -71,7 +96,7 @@ confidently-wrong auto-generated runbook is therefore **more dangerous than a bl
   (the `issues-open.json` / `bodies/` shape the producer reads) but must NOT invent the graph.
 - **Never auto-commit.** Emit files into the working tree and STOP. The human reviews and commits.
 
-If you cannot fill a block safely, **leave the FILL token and say so** — fail loud, never guess.
+If you cannot fill a section safely, **leave the FILL token and say so** — fail loud, never guess.
 
 ---
 
@@ -82,8 +107,9 @@ If you cannot fill a block safely, **leave the FILL token and say so** — fail 
 | **call-from-skill** (default) | the installed skill (`~/.claude/skills/loop-kit`) | `"$LOOP_KIT_DIR"/track` (the driver injects `LOOP_KIT_DIR`) | every runner has this skill installed (the loop is driven by Claude Code, so they do) |
 | **scaffold-a-copy** (vendored) | a real `plans/loop-kit/` copied into the repo | `./plans/loop-kit/track` | a collaborator's repo or CI that can't assume the skill is installed |
 
-The runtime layout is identical in both modes (`track`, `loop-drive.sh`, `adapters/`,
+The runtime layout is identical in both modes (`track`, `loop-drive.sh`, `adapters/`, `loop-runbook.md`,
 `materialize-*` as siblings), so scaffold-a-copy is literally "copy this dir into `plans/loop-kit/`".
+**Vendoring also PINS the skeleton** (and adapters) at that copy's version — the reproducibility knob.
 
 ---
 
@@ -100,8 +126,9 @@ strategy, and sensible defaults; mark anything you had to guess as *needs-confir
 
 ### Step 1 — confirm (one summary, ask only on ambiguity)
 Show the user a compact summary: detected backend + host, the `LAND_MODE` you'll default to, the
-delivery mode, which of `loop.config.sh` / `run-loop.sh` / `wave-loop.md` are new vs. already present,
-and the `<<FILL>>` tokens that will remain. Then ask — via the AskUserQuestion picker, with our real
+delivery mode, which of `loop.config.sh` / `run-loop.sh` / `loop.recipes.md` / `loop.scope.md` are new
+vs. already present (plus that the repo points at the shared `loop-runbook.md` skeleton, no per-repo
+runbook copy), and the `<<FILL>>` tokens that will remain. Then ask — via the AskUserQuestion picker, with our real
 options — ONLY the questions whose answers you couldn't safely infer. Typical ambiguous ones:
 `LAND_MODE` (`pr` vs `merge`), delivery mode (call-from-skill vs scaffold-a-copy), and — when the
 remote is unrecognized or the user named ClickUp — the backend itself. If everything was unambiguous,
@@ -129,21 +156,27 @@ skip straight to emit after the confirmation summary.
 3. **Emit the launcher** `plans/run-loop.sh` (the one path a human types that can't use
    `$LOOP_KIT_DIR` — the driver is what sets it). It discovers the installed skill and exec's the
    driver, and supports `--print-kit-dir`. A reference copy ships as
-   [`run-loop.template.sh`](run-loop.template.sh) — copy it in and `chmod +x`.
-   - **call-from-skill:** that's all the runtime the repo needs.
-   - **scaffold-a-copy:** ALSO copy the kit's runtime files into `plans/loop-kit/` and point the
-     runbook at `./plans/loop-kit/track` (see "Two delivery modes").
+   [`run-loop.template.sh`](run-loop.template.sh) — copy it in and `chmod +x`. **No runbook arg**:
+   `./plans/run-loop.sh` (no args) lets the driver default `RUNBOOK` to the shared skeleton — the repo
+   never holds its own runbook copy.
+   - **call-from-skill:** that's all the runtime the repo needs (the skeleton resolves via the skill).
+   - **scaffold-a-copy:** ALSO copy the kit's runtime files (incl. `loop-runbook.md`) into
+     `plans/loop-kit/` and point the recipes/track at `./plans/loop-kit/…` (see "Two delivery modes").
 
 > Each emit step writes only if the target is **absent**. If `plans/loop.config.sh` /
-> `plans/run-loop.sh` already exist, keep them and report `kept existing …` — `init` is re-run-safe.
+> `plans/run-loop.sh` / `plans/loop.recipes.md` / `plans/loop.scope.md` already exist, keep them and
+> report `kept existing …` — `init` is re-run-safe.
 
-### Step 3 — emit (Tier 2: the runbook — the dangerous part, fail loud)
-4. **Emit the runbook** `plans/wave-loop.md` (or `<loop>.md`) from
-   [`runbook.template.md`](runbook.template.md). Keep the SYNC→RECONCILE→PICK→CLAIM→BUILD→REVIEW→
-   LAND→CLOSE→LOG→FINISH state machine and the `"$LOOP_KIT_DIR"/track` verb calls intact.
-   Leave the **4 judgment blocks as `<<FILL: …>>` tokens.** Draft a *suggestion* in a comment if you
-   have evidence, but the token stays until a human confirms it. Tell the user exactly which tokens
-   remain and that the loop must not run until they're resolved.
+### Step 3 — emit (Tier 2: the recipes + scope — the dangerous part, fail loud)
+4. **Emit `plans/loop.recipes.md`** from [`recipes.template.md`](recipes.template.md) — the 5 ~stable
+   per-repo `## SECTION`s — **and `plans/loop.scope.md`** from [`scope.template.md`](scope.template.md) —
+   the 2 per-wave scope sections (`## TARGET`, `## KEYSTONES`) — the shared skeleton applies by name.
+   **Do NOT emit a per-repo runbook copy** and do NOT keep `plans/wave-loop.md` around: the SYNC→…→FINISH
+   state machine + `"$LOOP_KIT_DIR"/track` verb calls now live in the skill's `loop-runbook.md` skeleton
+   (symlinked, auto-updating), which the driver uses by default. Leave **every recipe + scope section as
+   a `<<FILL: …>>` token.** Draft a *suggestion* in a comment if you have evidence, but the token stays
+   until a human confirms it. Tell the user exactly which sections remain unfilled and that the loop must
+   not run until they're resolved (the skeleton STOPs `BLOCKED` on any unresolved section).
 5. **Do NOT author the dependency graph or the issue bodies.** Point the user at the producer
    (`materialize-*.mjs`) + the `issues-open.json`/`bodies/` contract in REFERENCE.md; that's their IP.
 
@@ -154,7 +187,9 @@ skip straight to emit after the confirmation summary.
   `KIT="$(./plans/run-loop.sh --print-kit-dir)"; TRACKER_CONFIG="$PWD/plans/loop.config.sh" LOOP_KIT_DIR="$KIT" "$KIT"/track caps`
   prints the configured backend's capabilities — **confirm `backend=` matches what you set** (without
   the `TRACKER_CONFIG` export, `track` falls back to the placeholder `REPO=owner/repo` and may report
-  the wrong backend, giving false confidence).
+  the wrong backend, giving false confidence). Also confirm the skeleton resolves: `ls "$KIT"/loop-runbook.md`
+  (the driver's default `RUNBOOK`) and that `plans/loop.recipes.md` (the driver's `$LOOP_RECIPES`) and
+  `plans/loop.scope.md` (the driver's `$LOOP_SCOPE`) exist.
 
 ---
 
@@ -164,28 +199,58 @@ Use when the repo already has `plans/loop.config.sh` and the user wants to chang
 `LAND_MODE`, switch `CLAIM_STRATEGY`, point at a different `RUNLOG`) or **add a second tracker
 backend**. Read the existing config, show the current values, and ask only what's changing (the
 AskUserQuestion picker, our real options). Rewrite **only** `plans/loop.config.sh`; never regenerate
-`plans/wave-loop.md` (the runbook holds hand-resolved `<<FILL>>` judgment — regenerating it would
-clobber that). After writing, re-run the wiring check from "Always" to confirm `backend=` is right.
+`plans/loop.recipes.md` or `plans/loop.scope.md` (they hold hand-resolved `<<FILL>>` judgment —
+regenerating would clobber that). After writing, re-run the wiring check from "Always" to confirm `backend=` is right.
 **Never auto-commit.**
+
+## `migrate` — lift a stale runbook copy into recipes (one-time)
+
+For a repo onboarded **before** the skeleton/recipes split: it has a per-repo `plans/wave-loop.md`
+(a copy of the old `runbook.template.md`) with the judgment baked in. `migrate` extracts that judgment
+into `plans/loop.recipes.md` (the 5 ~stable sections) + `plans/loop.scope.md` (the 2 per-wave scope
+sections) so the repo can drop the copy and use the shared skeleton. Engine:
+[`migrate.mjs`](migrate.mjs) (offline, like `materialize-plan.mjs`):
+
+```bash
+KIT="$(./plans/run-loop.sh --print-kit-dir)"
+# refuses to clobber either output:
+node "$KIT"/migrate.mjs --runbook plans/wave-loop.md --out plans/loop.recipes.md --scope-out plans/loop.scope.md
+node "$KIT"/migrate.mjs --runbook plans/wave-loop.md --out plans/loop.recipes.md --scope-out plans/loop.scope.md --overwrite
+```
+
+It maps each runbook region to a slot — Scope→TARGET/KEYSTONES (written to `loop.scope.md`),
+shared-lock→CONTENTION, the builder/reviewer briefs→BUILD-CONSTRAINTS/REVIEW-LENSES, LAND step→LAND, the
+CI-truth carve-out→CI-TRUTH (the last five written to `loop.recipes.md`) — extracting the source text
+**verbatim**, not reproducing a human's rewrapping/editorial polish. It is **non-destructive** (refuses to
+overwrite either output without `--overwrite`) and **fails loud**: any block it can't place confidently is
+left as a `<<FILL>>` token in whichever output it belongs to and reported as a FLAG on stderr (exit
+non-zero if any FILL remains in either file). `migrate` is a *starting point* — the human must REVIEW +
+trim every section (e.g. strip the mechanical scaffolding the briefs carry, which the skeleton already
+provides) before a real run. After migrating: drop the runbook arg (`./plans/run-loop.sh`), then delete
+`plans/wave-loop.md`.
 
 ## `run` — launch/resume the loop (once onboarded)
 
 ```bash
-./plans/run-loop.sh plans/wave-loop.md                       # default LAND_MODE from loop.config.sh
-LAND_MODE=pr ./plans/run-loop.sh plans/wave-loop.md          # open PRs instead of merging to main
-TRACKER_BACKEND=gitlab ./plans/run-loop.sh plans/wave-loop.md
+./plans/run-loop.sh                                          # default skeleton + LAND_MODE from loop.config.sh
+LAND_MODE=pr ./plans/run-loop.sh                             # open PRs instead of merging to main
+TRACKER_BACKEND=gitlab ./plans/run-loop.sh
+./plans/run-loop.sh plans/custom-loop.md                    # an explicit, non-default runbook (rare)
 ```
 
-Before launching, confirm there are **no unresolved `<<FILL>>` tokens** in the runbook (grep it) — the
-loop must not run with any remaining. `run-loop.sh` locates the installed skill and exec's
-`loop-drive.sh`, which exports `LOOP_KIT_DIR` (this dir) + `TRACKER_CONFIG` (the repo's
-`plans/loop.config.sh`) into each spawned session. Stop with Ctrl-C anytime — state is external, so
-re-running resumes. The driver tunables (MODEL, EFFORT, MAX_ITERS, WAIT_SECONDS, PERMISSION_MODE, …)
-are documented at the top of `loop-drive.sh`.
+Before launching, confirm there are **no unresolved `<<FILL>>` tokens** in `plans/loop.recipes.md` or
+`plans/loop.scope.md` (grep both) — the loop must not run with any remaining (the skeleton STOPs `BLOCKED`
+on one anyway). `run-loop.sh` locates the installed skill and exec's `loop-drive.sh`, which (with no
+runbook arg) defaults `RUNBOOK` to the skill's `loop-runbook.md` skeleton and exports `LOOP_KIT_DIR` (the
+kit dir), `TRACKER_CONFIG` (the repo's `plans/loop.config.sh`), `LOOP_RECIPES` (the repo's
+`plans/loop.recipes.md`), `LOOP_SCOPE` (the repo's `plans/loop.scope.md`), and — by sourcing the config —
+`WAVE` / `BRANCH_PREFIX` into each spawned session. Stop with Ctrl-C
+anytime — state is external, so re-running resumes. The driver tunables (MODEL, EFFORT, MAX_ITERS,
+WAIT_SECONDS, PERMISSION_MODE, …) are documented at the top of `loop-drive.sh`.
 
 ## `plan` — author a wave's backlog (the init→materialize bridge)
 
-`init` emits the config + runbook and stops; `materialize` assumes the producer's data dir already
+`init` emits the config + recipes and stops; `materialize` assumes the producer's data dir already
 exists and is correct. **`plan` owns the middle** — turning a project into the producer's input —
 without ever inventing the parts that are the user's domain IP. Engine: `materialize-plan.mjs`
 (offline, zero-dependency), three modes:
@@ -216,7 +281,7 @@ without ever inventing the parts that are the user's domain IP. Engine: `materia
 **Mechanical vs judgment.** `plan` owns the mechanical correctness (slug↔bodyFile, milestone
 resolution, label hygiene, acyclicity); the human owns the judgment (whether the deps are the *right*
 deps, what the acceptance criteria are). The `<<FILL>>` tokens and the "never infer an edge" rule are
-where that line is drawn — same posture as the runbook's 4 judgment blocks. **Hand-authoring escape
+where that line is drawn — same posture as the recipes' 4 judgment sections. **Hand-authoring escape
 hatch:** a user who prefers writing the producer contract directly skips `compile` and just runs
 `check --root` on their raw dir; the source format is strictly opt-in.
 
@@ -236,10 +301,11 @@ dangling dep, a dependency cycle that wedges the runtime in permanent WAIT) on a
 
 ## Rules
 
-- **Fail loud, never guess** on the 4 judgment blocks and the dependency graph — they corrupt shared
-  code or bypass a supply-chain gate if wrong, and the loop runs unattended.
+- **Fail loud, never guess** on the 4 judgment recipe sections and the dependency graph — they corrupt
+  shared code or bypass a supply-chain gate if wrong, and the loop runs unattended.
 - **Never auto-commit** anything this skill emits.
-- **Never run the loop mid-extraction or with unresolved `<<FILL>>` tokens.**
+- **Never run the loop mid-extraction or with unresolved `<<FILL>>` tokens** in `plans/loop.recipes.md`
+  or `plans/loop.scope.md`.
 - Multi-runner needs **N distinct tracker logins** (one token per user) in the default `assignee`
   strategy. To run **N agents under ONE login**, set `CLAIM_STRATEGY=note` (github): a per-agent
   `login#RUNNER_ID` comment-marker CAS that interops with assignee runners on the same issue. Note mode

@@ -29,17 +29,49 @@ Two invariants make it resumable after any crash/restart/summarization:
 - *(implicit)* INTERRUPTED — non-zero exit + no sentinel → state UNKNOWN; the driver backs off and
   retries (bounded by `MAX_FAILS`); the runbook's RECONCILE step self-heals the dangling claim.
 
-## Config resolution
+## The runbook: a shared SKELETON + per-repo RECIPES
+
+The loop runbook is split into **code** and **config**:
+- **`loop-runbook.md`** — the canonical **skeleton** (backend/project-neutral state machine). It lives
+  **in the kit** and is **symlinked** into each onboarded repo, like `track`/`adapters/`/`loop-drive.sh` —
+  so a skeleton change propagates everywhere with no per-repo copy to go stale. The driver defaults
+  `RUNBOOK` to it, so `./plans/run-loop.sh` (no runbook arg) uses it.
+- **`plans/loop.recipes.md`** — the **~stable per-repo judgment** as 5 labeled `## SECTION`s:
+  `CONTENTION`, `BUILD-CONSTRAINTS`, `REVIEW-LENSES`, `LAND`, `CI-TRUTH`. The driver exports it as
+  `$LOOP_RECIPES`.
+- **`plans/loop.scope.md`** — the **per-wave scope** as 2 labeled `## SECTION`s: `TARGET`, `KEYSTONES`,
+  rewritten each wave. The driver exports it as `$LOOP_SCOPE`.
+  The skeleton carries a `RECIPE → ## NAME` marker at each step that needs judgment (naming the file the
+  section lives in) and applies the named section **verbatim**; a missing section or a surviving
+  `<<FILL>>` makes it STOP with `LOOP_STATUS=BLOCKED` (fail loud — never guessed).
+
+**Pinning for reproducibility** uses the same knob as `adapters/`: the symlink/checkout. Vendor the kit
+into `<repo>/plans/loop-kit/` (delivery mode "scaffold-a-copy") or install a pinned skill version to
+freeze the skeleton; otherwise a skeleton update moves under the next iteration (usually what you want).
+
+## Config + env resolution
 
 `track` resolves its project config to the **first that exists** of: **`$TRACKER_CONFIG`** →
 **`$PWD/plans/loop.config.sh`** (call-from-skill, run from the repo root) → **`$HERE/../loop.config.sh`**
 (vendored mode, where the kit lives at `<repo>/plans/loop-kit/`) → the kit's `tracker.config.example.sh`
-(placeholder fallback, with a LOUD warning). The driver `export`s `TRACKER_CONFIG` =
-`<repo>/plans/loop.config.sh` and `LOOP_KIT_DIR` = the kit dir into every spawned session, so the
-runbook's `"$LOOP_KIT_DIR"/track` calls always hit the first branch. **Interactive (no driver):** run
-`track` from the repo root (the `$PWD/plans/loop.config.sh` branch resolves it) or export
-`TRACKER_CONFIG` — otherwise it falls through to the placeholder `REPO=owner/repo`. Every config value
-is `${VAR:-default}` so an env override always wins.
+(placeholder fallback, with a LOUD warning). **Interactive (no driver):** run `track` from the repo root
+(the `$PWD/plans/loop.config.sh` branch resolves it) or export `TRACKER_CONFIG` — otherwise it falls
+through to the placeholder `REPO=owner/repo`. Every config value is `${VAR:-default}` so an env override
+always wins.
+
+**The driver (`loop-drive.sh`) exports into every spawned session:**
+- `LOOP_KIT_DIR` — the kit dir (where `track` + `adapters/` + `loop-runbook.md` + `materialize-*` live);
+  the skeleton's verb calls are `"$LOOP_KIT_DIR"/track …`.
+- `TRACKER_CONFIG` — `<repo>/plans/loop.config.sh` (so `track`'s first resolution branch always hits).
+- `LOOP_RECIPES` — `<repo>/plans/loop.recipes.md` (the ~stable per-repo judgment the skeleton applies).
+- `LOOP_SCOPE` — `<repo>/plans/loop.scope.md` (the per-wave TARGET/KEYSTONES the skeleton applies).
+- `WAVE`, `BRANCH_PREFIX` (+ the rest of the config) — the driver **sources `loop.config.sh` into its
+  real env** (`set -a; . "$TRACKER_CONFIG"; set +a`) so the skeleton's `"$WAVE"` and `"$BRANCH_PREFIX/…"`
+  references resolve in the agent's bash calls. Because the config uses `${VAR:-default}`, a value pre-set
+  on the launch (e.g. `WAVE=wave:6 ./plans/run-loop.sh`) still **wins** — sourcing respects it.
+
+Each of `TRACKER_CONFIG` / `LOOP_RECIPES` / `LOOP_SCOPE` honors a pre-set env value (the driver only
+defaults them).
 
 `loop.config.sh` keys: `TRACKER_BACKEND` (github|gitlab|clickup — `local` is a planned backend, no
 adapter shipped yet), `LAND_MODE` (merge|pr), `REPO`,
@@ -199,7 +231,7 @@ bodies/<slug>.md`), `bodies/<slug>.md` (= the body + a rendered **`## Dependenci
 refuses to write a dirty result, then re-checks the generated dir.
 
 **The dependency heading is `## Dependencies`** — the one contract shared between what `compile` writes
-and what the runtime PICK step parses (`runbook.template.md` step 2: gate each dep in the body's
+and what the runtime PICK step parses (`loop-runbook.md` step 2: gate each dep in the body's
 `Dependencies` section on `item-state <id> = closed`). `compile` renders each dep as
 `` - <dep title> (`<dep-slug>`) ``. `check` parses it back, resolving each ref to a slug or title; a
 `#N` ref is treated as an **external** cross-wave dep (an issue already created in an earlier wave) and

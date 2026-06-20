@@ -9,7 +9,7 @@
 # plans/loop.config.sh and fill in real values.
 #
 # Every value uses ${VAR:-default} so an env override always wins, e.g.:
-#   TRACKER_BACKEND=gitlab LAND_MODE=pr ./plans/run-loop.sh plans/wave-loop.md
+#   TRACKER_BACKEND=gitlab LAND_MODE=pr ./plans/run-loop.sh
 
 # Which backend adapter to load: github | gitlab | clickup  (must match the kit's adapters/<backend>.sh;
 # a `local` backend is planned but ships no adapter yet — selecting it fails loud).
@@ -45,8 +45,8 @@ export CLAIM_STRATEGY="${CLAIM_STRATEGY:-assignee}"
 # the SAME id — so the id must be STABLE across restarts AND DISTINCT between concurrent agents. There is
 # NO safe default (hostname is stable but collides for two agents on one host; host-pid is unique but
 # changes on restart), so set it explicitly per agent and DON'T pass it via loop.config.sh — put it on
-# each agent's command line so two agents differ:  RUNNER_ID=agent-1 ./plans/run-loop.sh plans/wave-loop.md
-#                                                  RUNNER_ID=agent-2 ./plans/run-loop.sh plans/wave-loop.md
+# each agent's command line so two agents differ:  RUNNER_ID=agent-1 ./plans/run-loop.sh
+#                                                  RUNNER_ID=agent-2 ./plans/run-loop.sh
 # (gitlab note mode is username-granular and ignores RUNNER_ID.) No time windows: a build of any length is
 # safe, and git's non-fast-forward push remains the final backstop against a double merge.
 

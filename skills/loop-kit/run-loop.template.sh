@@ -7,10 +7,16 @@
 # driver is what SETS it; chicken-and-egg). `init` copies this template in as plans/run-loop.sh.
 #
 # Usage (paths are repo-relative; run from the repo):
-#   ./plans/run-loop.sh <runbook> [extra context…]    # launch the loop on a runbook
+#   ./plans/run-loop.sh                               # launch the loop on the kit's default SKELETON runbook
+#                                                     #   (loop-runbook.md) + this repo's plans/loop.recipes.md
+#                                                     #   + plans/loop.scope.md
+#   ./plans/run-loop.sh "extra context…"              # same, plus extra inline context for this run
+#   ./plans/run-loop.sh <runbook> [extra context…]   # launch on an explicit (non-default) runbook file
 #   ./plans/run-loop.sh --print-kit-dir               # print the resolved kit dir (for materialize-*.mjs etc.)
 #   LOOP_KIT_DIR=/path ./plans/run-loop.sh …          # force a specific kit dir (skips discovery)
-# Driver env passthrough (LAND_MODE, TRACKER_BACKEND, MODEL, EFFORT, MAX_ITERS, …) is honored.
+# The driver defaults RUNBOOK to the skeleton and exports LOOP_RECIPES (=plans/loop.recipes.md) +
+# LOOP_SCOPE (=plans/loop.scope.md) itself — this launcher doesn't set them. Driver env passthrough
+# (LAND_MODE, TRACKER_BACKEND, MODEL, EFFORT, MAX_ITERS, …) is honored.
 set -euo pipefail
 
 # This repo's root (the script lives at <repo>/plans/run-loop.sh).

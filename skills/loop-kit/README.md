@@ -18,10 +18,17 @@ calls verbs, never `gh`/`glab`/`curl` directly. (A `local`-files backend is desi
   up a scope's issues on the tracker from a backlog file.
 - `materialize-plan.mjs` + `plan.template/` — the `plan` engine: scaffold a wave's backlog as a source
   tree, `compile` it into the producer's data dir, and `check` it (the init→materialize bridge).
+- `migrate.mjs` — the `migrate` engine: lift the per-repo judgment out of a stale `plans/wave-loop.md`
+  (a pre-split runbook copy) into `plans/loop.recipes.md` + `plans/loop.scope.md` (fail-loud, non-destructive).
+- `loop-runbook.md` — the canonical runbook **skeleton** (the SYNC→…→FINISH state machine + verb calls).
+  It lives in the kit and is **symlinked** into each repo; the driver defaults `RUNBOOK` to it. The
+  judgment it applies lives in the repo's `plans/loop.recipes.md` (~stable) + `plans/loop.scope.md` (per-wave).
+- `recipes.template.md` — the per-repo recipes template (copied in as `plans/loop.recipes.md`): the 5
+  ~stable judgment `## SECTION`s the skeleton applies by name, left as fail-loud `<<FILL>>` tokens.
+- `scope.template.md` — the per-wave scope template (copied in as `plans/loop.scope.md`): the 2 scope
+  `## SECTION`s (`## TARGET`, `## KEYSTONES`) the skeleton applies by name, left as fail-loud `<<FILL>>` tokens.
 - `tracker.config.example.sh` — the per-repo config template (copied in as `plans/loop.config.sh`).
 - `run-loop.template.sh` — the human launcher (copied in as `plans/run-loop.sh`).
-- `runbook.template.md` — the loop runbook template (the SYNC→…→FINISH state machine + verb calls,
-  with the 4 per-project judgment blocks left as fail-loud `<<FILL>>` tokens).
 
 ## What each adapter needs
 
@@ -49,12 +56,17 @@ For ClickUp the code can live on any git host — ClickUp is only the tracker.
 Invoke the skill on a target repo with a sub-command:
 
 - **`init`** (default, auto-runs if the repo isn't onboarded) — probe the repo, confirm a write-plan,
-  and emit `plans/loop.config.sh`, `plans/run-loop.sh`, and a `plans/wave-loop.md` runbook. Non-destructive
-  (keeps any file that already exists). Then resolve the `<<FILL>>` judgment tokens by hand and commit.
+  and emit `plans/loop.config.sh`, `plans/run-loop.sh`, `plans/loop.recipes.md`, and `plans/loop.scope.md`
+  (pointing the repo at the shared `loop-runbook.md` skeleton — no per-repo runbook copy). Non-destructive
+  (keeps any file that already exists). Then resolve the `<<FILL>>` judgment tokens in `loop.recipes.md`
+  and `loop.scope.md` by hand and commit.
 - **`config`** — edit values or add a tracker backend on an already-onboarded repo (rewrites only the config).
 - **`plan`** — author a wave's backlog as a source tree (`plans/.tracker/src/`), then compile + validate
   it into the producer's data dir. Bridges `init`→`materialize`; scaffolds and checks the dependency
   graph + bodies but never authors them.
+- **`migrate`** — one-time, for a repo onboarded before the skeleton/recipes split: lift the judgment
+  from a stale `plans/wave-loop.md` into `plans/loop.recipes.md` + `plans/loop.scope.md` (`migrate.mjs`;
+  fail-loud, non-destructive).
 - **`run`** — launch/resume the loop (`./plans/run-loop.sh`).
 - **`materialize`** — human-gated producer run that stands up a wave's issues from a backlog file (gated
   behind a clean `plan check`).

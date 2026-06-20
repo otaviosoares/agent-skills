@@ -1,15 +1,28 @@
 <!--
-  runbook.template.md — the loop-kit runbook template. `init` copies this in as plans/<loop>.md and
-  fills the mechanical bits. The 4 `<<FILL: … >>` tokens are the irreducible PER-PROJECT judgment;
-  they are NOT inferable from the repo and a wrong value corrupts shared code or bypasses a
-  supply-chain gate while the loop runs UNATTENDED. A human MUST resolve every token before a real
-  run — fail loud, never guess. Search for `<<FILL` to find them.
+  loop-runbook.md — the CANONICAL loop-kit runbook SKELETON. This file lives IN THE SKILL and is
+  symlinked into every onboarded repo (like track / adapters / loop-drive.sh), so a skeleton change
+  propagates to every repo automatically — no per-repo copy to go stale. `run-loop.sh` defaults
+  RUNBOOK to this file.
 
-  Verb calls use "${LOOP_KIT_DIR:?…}"/track. In CALL-FROM-SKILL mode the driver exports LOOP_KIT_DIR,
-  so the `:?` fails loud if the runbook is ever run without it. In SCAFFOLD-A-COPY (vendored) mode,
-  `init` may instead emit `./plans/loop-kit/track` directly. Running interactively without the driver?
-  First, from the repo root: `export LOOP_KIT_DIR="$(./plans/run-loop.sh --print-kit-dir)" TRACKER_CONFIG="$PWD/plans/loop.config.sh"`
-  (the driver normally exports both; `track` also resolves `$PWD/plans/loop.config.sh` when run from the repo root).
+  It is backend-neutral and project-neutral. The per-repo JUDGMENT (contention recipe, land/lockfile
+  recipe, CI-truth carve-out, review lenses, build constraints) is NOT here — it lives in the REPO's
+  `plans/loop.recipes.md`, which the driver exports as $LOOP_RECIPES. The PER-WAVE scope (the wave's
+  target/keystones) lives in the REPO's `plans/loop.scope.md`, exported as $LOOP_SCOPE.
+  Wherever a step needs that judgment, the skeleton carries a **RECIPE →** marker naming the labeled
+  section to apply verbatim. The kit NEVER auto-fills those sections (fail loud — a wrong value
+  corrupts shared code or bypasses a supply-chain gate while the loop runs UNATTENDED).
+
+  Environment the driver exports into each session (loop-drive.sh):
+    LOOP_KIT_DIR    — this kit dir (where track + adapters/ live). Verb calls use "$LOOP_KIT_DIR"/track.
+    TRACKER_CONFIG  — the repo's plans/loop.config.sh (track sources it for REPO/RUNLOG/backend/…).
+    LOOP_RECIPES    — the repo's plans/loop.recipes.md (the ~stable per-repo judgment this skeleton applies).
+    LOOP_SCOPE      — the repo's plans/loop.scope.md (the per-wave TARGET/KEYSTONES this skeleton applies).
+    WAVE            — the scope label (from loop.config.sh). The skeleton's verb calls pass "$WAVE".
+    BRANCH_PREFIX   — the branch/worktree prefix (from loop.config.sh). Branches are "$BRANCH_PREFIX/N-<slug>".
+  Running interactively without the driver? From the repo root, first:
+    export LOOP_KIT_DIR="$(./plans/run-loop.sh --print-kit-dir)" TRACKER_CONFIG="$PWD/plans/loop.config.sh" \
+           LOOP_RECIPES="$PWD/plans/loop.recipes.md" LOOP_SCOPE="$PWD/plans/loop.scope.md"; set -a; . "$TRACKER_CONFIG"; set +a
+  (the last clause exports WAVE/BRANCH_PREFIX for the verb calls below).
 -->
 # Build Loop — context-bounded, multi-runner, tracker-driven
 
@@ -21,24 +34,48 @@ that delegates each issue to *fresh sub-agents*.
 State and dependencies live **entirely on the tracker** (issues, labels, the run-log) — this runbook
 reads nothing local for state.
 
-> **Current scope: `<<FILL: scope label, e.g. wave:1 >>`.** Update the *Scope* block when advancing.
-> Run-log handle: `RUNLOG` in `plans/loop.config.sh`. Backend / land mode: also `plans/loop.config.sh`.
+> **Current scope: `$WAVE`** (the scope label in `plans/loop.config.sh`). Advancing a wave = bump
+> `WAVE` in `loop.config.sh` and edit the `## TARGET`/`## KEYSTONES` sections of `plans/loop.scope.md`
+> (see end). Run-log handle: `RUNLOG` in `plans/loop.config.sh`. Backend / land mode: also there.
+
+## The per-repo recipes + per-wave scope — read `$LOOP_RECIPES` and `$LOOP_SCOPE` first
+Everything that is *project judgment* lives in two repo files, as clearly-labeled `## SECTION`s:
+- **`$LOOP_SCOPE`** (`plans/loop.scope.md`) — the **per-wave** scope, rewritten each wave: `## TARGET`,
+  `## KEYSTONES`.
+- **`$LOOP_RECIPES`** (`plans/loop.recipes.md`) — the **~stable per-repo** judgment: `## CONTENTION`,
+  `## BUILD-CONSTRAINTS`, `## REVIEW-LENSES`, `## LAND`, `## CI-TRUTH`.
+
+This skeleton references each by name at the step it governs with a **RECIPE → `## NAME`** marker that
+also names the file. The contract, applied at every marker:
+
+> **At a `RECIPE → ## NAME` marker, open the named file (`$LOOP_SCOPE` for `## TARGET`/`## KEYSTONES`;
+> `$LOOP_RECIPES` for the other five), find the `## NAME` section, and apply it VERBATIM as the rule for
+> that step — do not improvise, summarize, or substitute a sensible default.** If that file is missing,
+> or the referenced section is absent or still carries a `<<FILL>>` token, the judgment is unresolved:
+> **STOP and emit `LOOP_STATUS=BLOCKED`** (`track log "BLOCKED — <file> § NAME unresolved. Unblock-when:
+> the ## NAME section is filled"`, where `<file>` is `$LOOP_SCOPE` or `$LOOP_RECIPES`). Never guess it —
+> a wrong scope/contention/land/CI-truth/lens value corrupts shared code or bypasses a supply-chain gate
+> while the loop runs unattended.
+
+Sections this skeleton applies: `## TARGET`, `## KEYSTONES` (in `$LOOP_SCOPE`); `## CONTENTION`,
+`## BUILD-CONSTRAINTS`, `## REVIEW-LENSES`, `## LAND`, `## CI-TRUTH` (in `$LOOP_RECIPES`).
 
 ## Run it (every runner runs this — self-paced, context-bounded)
 ```
-./plans/run-loop.sh plans/<this-runbook>.md
-# open PRs instead of merging to main:   LAND_MODE=pr ./plans/run-loop.sh plans/<this-runbook>.md
-# different tracker backend:              TRACKER_BACKEND=gitlab ./plans/run-loop.sh plans/<this-runbook>.md
+./plans/run-loop.sh                                       # defaults to this skeleton + LAND_MODE from loop.config.sh
+LAND_MODE=pr ./plans/run-loop.sh                          # open PRs instead of merging to main
+TRACKER_BACKEND=gitlab ./plans/run-loop.sh               # different tracker backend
 ```
-`run-loop.sh` locates the installed loop-kit skill and spawns a **fresh headless `claude -p` per
-iteration** (empty context; all state is on the tracker, so each session re-derives it). No per-loop
-script — advancing the scope = edit the *Scope* block below.
+`run-loop.sh` locates the installed loop-kit skill, points RUNBOOK at this skeleton, and spawns a
+**fresh headless `claude -p` per iteration** (empty context; all state is on the tracker, so each
+session re-derives it). No per-loop script — advancing the scope = `WAVE` + the `## TARGET` scope section.
 
 **Tracker interface (backend-agnostic).** This runbook NEVER calls `gh`/`glab` directly — it calls
 verbs through `"${LOOP_KIT_DIR:?run via ./plans/run-loop.sh, or export LOOP_KIT_DIR}"/track <verb>`,
 and `TRACKER_BACKEND` (in `plans/loop.config.sh`) picks the adapter. Verb list + lock contract:
 the kit's REFERENCE.md. Verbs used below: `sync-list`, `runlog-tail`, `view`, `item-state`,
-`reconcile-mine`, `branch-merged`, `claim`→`won|lost`, `release`, `close`, `mark-review`, `log`, `open-pr`, `board-done`.
+`reconcile-mine`, `branch-merged`, `claim`→`won|lost`, `claim-owner`, `whoami`, `release`, `close`,
+`mark-review`, `log`, `open-pr`, `board-done`.
 
 **Precondition (multi-runner):** each runner's tracker CLI is authed as a **distinct user** — the
 *assignee* is the lock that tells runners apart. One shared account → run **single-runner**. (Backend
@@ -87,17 +124,17 @@ Two rules make this work:
 ---
 
 ## Scope — the queue
-- **Target:** `<<FILL: the in-scope issue set — the scope label + how the frontier was chosen (which
-  deps must be closed). e.g. "all OPEN wave:1 issues whose cross-plan deps are closed". >>`
-- **Keystones (prefer first):** `<<FILL: the spine roots to build first, if any >>`.
-- **Out of scope:** issues outside the scope label. Never auto-advance the scope (see end).
+- **Target:** **RECIPE → `## TARGET`** — apply the `## TARGET` section of `$LOOP_SCOPE` verbatim: the
+  in-scope issue set (the `$WAVE` scope label + how the frontier was chosen — which deps must be closed).
+- **Keystones (prefer first):** **RECIPE → `## KEYSTONES`** — apply the `## KEYSTONES` section of
+  `$LOOP_SCOPE` verbatim (the spine roots to build first, if any).
+- **Out of scope:** issues outside the `$WAVE` scope label. Never auto-advance the scope (see end).
 
 ## The shared lock — how runners don't collide
 - **Per-issue lock** = `assignee` + in-progress label. Claim before building; release on close.
-- **Contention axes / merge recipe** — `<<FILL: which files are merge hotspots and the per-file
-  resolution rule. e.g. a shared schema file → each issue writes a NEW schema-<domain>.ts + barrel
-  union-merge; generated files (route tree, lockfile) → regenerate at merge; frozen package shapes →
-  consume-only. If two in-progress issues touch the same shared file, serialize them. >>`
+- **Contention axes / merge recipe** — **RECIPE → `## CONTENTION`** — apply the `## CONTENTION` section
+  of `$LOOP_RECIPES` verbatim: which files are merge hotspots and the per-file resolution rule. If two
+  in-progress issues touch the same shared file the section names, serialize them.
 - **Dependencies are on the issue itself** — the `Dependencies` section of the body
   (`"$LOOP_KIT_DIR"/track view N`): foundation, intra-plan (phase numbers), cross-plan.
 
@@ -105,7 +142,7 @@ Two rules make this work:
 
 ## The orchestrator iteration (what each driver-spawned session does)
 1. **SYNC** — `git fetch origin`; fast-forward the base branch. Derive live state:
-   `"$LOOP_KIT_DIR"/track sync-list <<FILL: scope label >>`.
+   `"$LOOP_KIT_DIR"/track sync-list "$WAVE"`.
    Then read the **run-log resume trail** — the last 1–2 entries only (orchestrator hygiene):
    `"$LOOP_KIT_DIR"/track runlog-tail 2`. The last entry records how the previous iteration ended
    (`merged …` / `WAIT` / `BLOCKED`). A trailing **`BLOCKED`** is handled first in RECONCILE (1b-a).
@@ -114,14 +151,14 @@ Two rules make this work:
    `LOOP_STATUS=BLOCKED` on issue #N, do **not** silently re-attempt it. That entry ends with an
    explicit **`Unblock-when: <condition>`** — re-test *that exact condition* against current state,
    checking the **specific** thing it names (e.g. a specific CI step, or "commit `<sha>` is on the
-   base branch"), **NOT** `<<FILL: which checks are NON-gating — a structurally-red CD/deploy job
-   (e.g. a missing deploy token) that must NOT wedge the loop. See the CI-truth carve-out below. >>`:
+   base branch"), **NOT** a non-gating check — see **RECIPE → `## CI-TRUTH`** (a structurally-red
+   CD/deploy job that must NOT wedge the loop):
    - **Still blocked** → re-emit `LOOP_STATUS=BLOCKED`, append a one-line `still blocked on #N` note, STOP.
    - **Cleared** → #N is still your claim; fall through to (b) and resume it (the run-log says how far
      it got — branch built ⇒ resume at LAND, not a fresh BUILD).
    **(b) Finish a dangling claim.** A prior iteration can be interrupted *after* LAND merged but
    *before* CLOSE/LOG, stranding an issue that is **yours + in-progress but actually done**. List your
-   dangling claims — `"$LOOP_KIT_DIR"/track reconcile-mine <<FILL: scope label >>`; for each:
+   dangling claims — `"$LOOP_KIT_DIR"/track reconcile-mine "$WAVE"`; for each:
    - **Shared-login gate (only when `CLAIM_STRATEGY=note`).** `reconcile-mine` keys on the *login*, so
      under a login shared by several agents it also returns a **sibling's claim** — adopting it would
      double-build. Before touching the item, run `"$LOOP_KIT_DIR"/track claim-owner N` and compare to
@@ -130,17 +167,17 @@ Two rules make this work:
      assignee-mode claim that left no marker, or all released = yours to finish). If it is a **different
      non-empty** runner, that sibling owns it (building, or crashed and will reup its own id) → **SKIP
      this item**, do not build. (In `assignee` mode this gate is a no-op: skip to the branch check.)
-   Then check whether its branch `<<FILL: BRANCH_PREFIX >>/N-<slug>` is already landed —
-   `"$LOOP_KIT_DIR"/track branch-merged <<FILL: BRANCH_PREFIX >>/N-<slug>`:
+   Then check whether its branch `$BRANCH_PREFIX/N-<slug>` is already landed —
+   `"$LOOP_KIT_DIR"/track branch-merged "$BRANCH_PREFIX/N-<slug>"`:
    - **Already merged** → just finish the stranded tail: **CLOSE** (7) + **LOG** (8, mark `reconciled
      after interrupt`). That **is** this iteration's work → stop, emit `CONTINUE`; **don't also PICK**.
    - **Not merged** → resume at **BUILD/REVIEW/LAND** (do **not** re-CLAIM — you already own it).
 2. **PICK** — choose one OPEN in-scope issue that is **all of**: unassigned · not in-progress · not
    in-review · not gated · every dep in its **`Dependencies` section closed** (`track view N` for the
    body; test each with `"$LOOP_KIT_DIR"/track item-state <depId>` = `closed`). **Skip** any whose
-   contention axis (above) overlaps an issue currently in-progress you don't own. Prefer keystones;
-   among equals **don't deterministically pick what another runner would** — the tie-break in step 3
-   resolves rare races.
+   contention axis (`## CONTENTION`) overlaps an issue currently in-progress you don't own. Prefer
+   keystones; among equals **don't deterministically pick what another runner would** — the tie-break
+   in step 3 resolves rare races.
 3. **CLAIM (atomic)** — `"$LOOP_KIT_DIR"/track claim N` performs the add-assignee + in-progress,
    re-read, and arbitration, printing **`won`** or **`lost`**. On `lost` the verb has already released
    your claim → back to PICK. (Manual release on abort: `"$LOOP_KIT_DIR"/track release N`.)
@@ -150,14 +187,13 @@ Two rules make this work:
    below → `{verdict, findings[]}`. If `findings` has **P0/P1** → spawn a **fresh fixer sub-agent**
    (each finding needs a red-without-fix regression test) → re-run REVIEW until `CLEAN`.
 6. **LAND** — in the worktree: rebase on the latest base branch; resolve conflicts per the contention
-   recipe above. **LAND recipe:** `<<FILL: the lockfile/dependency reconcile + any supply-chain
-   cooldown. e.g. take the base branch's lockfile and run a frozen install; only on a real dep
-   add/bump do a deliberate install honoring the committed cooldown — NEVER disable the cooldown.
-   Name the exact install command CI enforces, so a runner never merges a lockfile that fails it. >>`
-   Once **CI is green**, the terminal action depends on **`LAND_MODE`**:
+   recipe (`## CONTENTION`) above. **RECIPE → `## LAND`** — apply the `## LAND` section of
+   `$LOOP_RECIPES` verbatim: the lockfile/dependency reconcile + any supply-chain cooldown, including
+   the exact install command CI enforces (so a runner never merges a lockfile that fails it). Do not
+   improvise a lockfile resolution. Once **CI is green**, the terminal action depends on **`LAND_MODE`**:
    - **`merge` (default)** — **merge to the base branch**. (Conflicts won't resolve cleanly? release +
      log — don't guess.) → CLOSE (7m).
-   - **`pr`** — `url=$("$LOOP_KIT_DIR"/track open-pr <<FILL: BRANCH_PREFIX >>/N-<slug> N)` opens a
+   - **`pr`** — `url=$("$LOOP_KIT_DIR"/track open-pr "$BRANCH_PREFIX/N-<slug>" N)` opens a
      PR/MR and prints its URL; **do not merge**. If it exits non-zero / prints no URL → `release N`,
      `log "BLOCKED #N — open-pr failed. Unblock-when: a PR for the branch exists"`, emit `BLOCKED`.
      On success → 7p.
@@ -174,21 +210,21 @@ Two rules make this work:
    do **not** loop back to SYNC or schedule a wakeup.
 
 ### Builder sub-agent brief (minimal — orchestrator passes only this)
-> Build issue **#N** of `<REPO>` to *merge-ready, not merged*. Read `plans/<this-runbook>.md` for the
-> rules. Steps: (1) `"$LOOP_KIT_DIR"/track view N` → goal/deps. (2) Read acceptance criteria from the
-> plan file; post them as a checklist comment on #N (DoR). `<<FILL: any build constraints — frozen
-> packages to consume-only, design specs binding on UI slices, test requirements, security invariants
-> (e.g. auth step-up on sensitive ops). >>` (3) Create a worktree/branch off the base branch.
-> (4) Implement the slice per the contention recipe (new shared-file shapes go in this issue's own
-> file; don't edit frozen shapes). (5) Build + typecheck + test until green; push the branch.
+> Build issue **#N** of `<REPO>` to *merge-ready, not merged*. Read this runbook (`$RUNBOOK`) and the
+> repo recipes (`$LOOP_RECIPES`) for the rules. Steps: (1) `"$LOOP_KIT_DIR"/track view N` → goal/deps.
+> (2) Read acceptance criteria from the plan file; post them as a checklist comment on #N (DoR).
+> **Apply the `## BUILD-CONSTRAINTS` section of `$LOOP_RECIPES` verbatim** (frozen packages to
+> consume-only, design specs binding on UI slices, test requirements, security invariants). (3) Create
+> a worktree/branch `$BRANCH_PREFIX/N-<slug>` off the base branch.
+> (4) Implement the slice per the contention recipe (`## CONTENTION`: new shared-file shapes go in this
+> issue's own file; don't edit frozen shapes). (5) Build + typecheck + test until green; push the branch.
 > **Return ONLY** `{issue, branch, headSha, ci:"green"|"red", summary, blockers:[]}`. Do **not** merge.
 
 ### Reviewer sub-agent brief
-> Adversarially review branch `<branch>` for issue **#N** — you did **not** write this code. Lenses:
-> `<<FILL: the domain threat model — the review lenses that matter here. e.g. cross-tenant isolation ·
-> money/contract correctness · auth/RBAC + audit · regression/CI · acceptance-criteria coverage ·
-> design fidelity for UI slices. >>` Each finding: severity `P0|P1|P2`, `file:line`, and a failing-test
-> repro (or, for a design finding, the violated rule). **Return ONLY**
+> Adversarially review branch `<branch>` for issue **#N** — you did **not** write this code. **Apply
+> the `## REVIEW-LENSES` section of `$LOOP_RECIPES` verbatim** as the lenses that matter here (the
+> domain threat model). Each finding: severity `P0|P1|P2`, `file:line`, and a failing-test repro (or,
+> for a design finding, the violated rule). **Return ONLY**
 > `{verdict:"CLEAN"|"CHANGES", findings:[{sev,file,line,desc,repro}]}`.
 
 ### Fixer sub-agent brief (only if P0/P1)
@@ -208,7 +244,7 @@ the issue. Per-item state lives on the individual issues; the run-log is the chr
 - **Work available → BUILD**, then emit `CONTINUE`.
 - **Starved → WAIT (do NOT stop).** In-scope issues remain but none pickable *right now* (assigned to
   another runner, or gated on an open dep). Emit `WAIT`; the driver sleeps and re-SYNCs.
-- **Complete → STOP.** `"$LOOP_KIT_DIR"/track sync-list <<FILL: scope label >>` returns **zero** open
+- **Complete → STOP.** `"$LOOP_KIT_DIR"/track sync-list "$WAVE"` returns **zero** open
   → post a final ✅ summary via `track log` and emit `COMPLETE`.
 - **Blocked → STOP (re-checkable).** A human decision/input is needed. Record it via `track log "…
   Unblock-when: …"` with a crisp condition, leave the claim intact (resumable), emit `BLOCKED`.
@@ -219,9 +255,10 @@ the issue. Per-item state lives on the individual issues; the run-log is the chr
 
 ## Safety rails
 - Never modify frozen/shared shapes out-of-band. Never force-push the base branch.
-- **CI truth vs structurally-red CD:** `<<FILL: which checks GATE landability vs which are non-gating
-  (a CD/deploy job red for environmental reasons — e.g. a missing deploy token). Merge only on the
-  gating checks; a structurally-red non-gating job must NOT wedge the loop. >>`
+- **CI truth vs structurally-red CD:** **RECIPE → `## CI-TRUTH`** — apply the `## CI-TRUTH` section of
+  `$LOOP_RECIPES` verbatim: which checks GATE landability vs which are non-gating (a CD/deploy job red
+  for environmental reasons). Merge only on the gating checks; a structurally-red non-gating job must
+  NOT wedge the loop.
 - Merge only after CI is green on a tree **rebased on the current base branch**.
 - **One in-progress issue per runner at a time** (claim → land → release before the next).
 - The orchestrator stays thin: delegate every build/review/fix to a fresh sub-agent.
@@ -245,4 +282,6 @@ then push it with the producer (`materialize-*.mjs`):
    `source plans/loop.config.sh && DRY=1 node "$KIT"/materialize-github.mjs --batch-data <scope>.json
    --root plans/.tracker` to rehearse, then `DRY=0`. (GitLab: `materialize-gitlab.mjs`,
    `TRACKER_BACKEND=gitlab`, set `GITLAB_HOST`. ClickUp: `materialize-clickup.mjs`.)
-4. Create the scope's run-log issue, update this runbook's *Scope* block, and re-launch the loop.
+4. Create the scope's run-log issue, then **advance the scope: bump `WAVE` in `plans/loop.config.sh`
+   and edit the `## TARGET` / `## KEYSTONES` sections of `plans/loop.scope.md`** to the new frontier.
+   Re-launch the loop.
