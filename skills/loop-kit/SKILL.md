@@ -240,6 +240,10 @@ dangling dep, a dependency cycle that wedges the runtime in permanent WAIT) on a
   code or bypass a supply-chain gate if wrong, and the loop runs unattended.
 - **Never auto-commit** anything this skill emits.
 - **Never run the loop mid-extraction or with unresolved `<<FILL>>` tokens.**
-- Multi-runner needs **N distinct tracker logins** (github / clickup — one token per user) or a
-  single-assignee-safe `CLAIM_STRATEGY=note` (gitlab Free). One shared login → degrade to single-runner
-  and say so.
+- Multi-runner needs **N distinct tracker logins** (one token per user) in the default `assignee`
+  strategy. To run **N agents under ONE login**, set `CLAIM_STRATEGY=note` (github): a per-agent
+  `login#RUNNER_ID` comment-marker CAS that interops with assignee runners on the same issue. Note mode
+  REQUIRES a stable, distinct **`RUNNER_ID` per agent** (passed on each agent's command line, not in
+  `loop.config.sh`) — ownership is identity-based, so a downed agent reups with the same id to recover
+  its claim. Invariant: **a login is wholly one strategy** (mixing under one login double-builds).
+  clickup has no note strategy → distinct `CLICKUP_TOKEN`s, or single-runner; say so when degrading.

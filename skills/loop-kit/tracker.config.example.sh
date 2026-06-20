@@ -33,9 +33,22 @@ export WAVE="${WAVE:-wave:1}"
 # and it is backend-neutral (avoid host-shaped "Merge #N", which breaks on GitLab's !N MR iids).
 export BRANCH_PREFIX="${BRANCH_PREFIX:-<prefix>}"
 
-# GitLab-only: claim mechanism. assignee = additive-+ assignee union (needs a paid multi-assignee tier);
-# note = note-marker CAS fallback for Free tier (single assignee). Ignored by other backends.
+# Claim mechanism (github + gitlab). assignee (default) = add-assignee + login-sort CAS; REQUIRES each
+# runner a DISTINCT login. note = comment-marker CAS that lets N agents SHARE ONE login (e.g. a teammate
+# running two agents under one account) — every runner still assigns its login up front, so note and
+# assignee runners INTEROP safely on the same issue. (gitlab: note is also the Free-tier single-assignee
+# fallback.) clickup ignores this. INVARIANT: a given login is wholly one strategy — never both.
 export CLAIM_STRATEGY="${CLAIM_STRATEGY:-assignee}"
+
+# github note-strategy: REQUIRED, per-AGENT id appended to the login in the claim marker (claimant =
+# login#RUNNER_ID). Ownership is identity-based — a downed agent recovers its OWN claim by reuping with
+# the SAME id — so the id must be STABLE across restarts AND DISTINCT between concurrent agents. There is
+# NO safe default (hostname is stable but collides for two agents on one host; host-pid is unique but
+# changes on restart), so set it explicitly per agent and DON'T pass it via loop.config.sh — put it on
+# each agent's command line so two agents differ:  RUNNER_ID=agent-1 ./plans/run-loop.sh plans/wave-loop.md
+#                                                  RUNNER_ID=agent-2 ./plans/run-loop.sh plans/wave-loop.md
+# (gitlab note mode is username-granular and ignores RUNNER_ID.) No time windows: a build of any length is
+# safe, and git's non-fast-forward push remains the final backstop against a double merge.
 
 # ── ClickUp (REST API v2; TRACKER_BACKEND=clickup) ──────────────────────────────────────────────
 # ClickUp has no official CLI — the adapter curls the API with a raw `pk_…` personal token. The tracker
