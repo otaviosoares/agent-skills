@@ -92,6 +92,21 @@ cd "$REPO_ROOT" || { echo "✋ Could not cd into repo root '$REPO_ROOT'" >&2; ex
 export LOOP_KIT_DIR="$SCRIPT_DIR"
 export TRACKER_CONFIG="${TRACKER_CONFIG:-$REPO_ROOT/plans/loop.config.sh}"
 
+# ── preflight: CLAIM_STRATEGY=note requires a per-agent RUNNER_ID — fail at LAUNCH, not mid-iteration ──
+# Resolve the effective strategy the way `track` will (env wins; else the config's default), by sourcing
+# the config in a subshell so we read its value without polluting the driver's env. Then refuse to spawn
+# a single iteration if note mode has no RUNNER_ID — the operator must fix the command line, and a warning
+# buried in one headless agent's stderr would be missed.
+_resolved_strategy="$( { [[ -f "$TRACKER_CONFIG" ]] && . "$TRACKER_CONFIG"; } >/dev/null 2>&1; printf '%s' "${CLAIM_STRATEGY:-assignee}" )"
+if [[ "$_resolved_strategy" == "note" && -z "${RUNNER_ID:-}" ]]; then
+  echo "✋ CLAIM_STRATEGY=note requires a per-agent RUNNER_ID, set on THIS launch (not in loop.config.sh," >&2
+  echo "   so two concurrent agents differ). It must be STABLE across restarts and DISTINCT per agent —" >&2
+  echo "   a downed agent reups with the same id to recover its own claim. Launch each agent like:" >&2
+  echo "     RUNNER_ID=agent-1 $0 $RUNBOOK" >&2
+  echo "     RUNNER_ID=agent-2 $0 $RUNBOOK" >&2
+  exit 1
+fi
+
 LOOP_NAME="$(basename "$RUNBOOK" | sed -E 's/\.[^.]+$//')"
 
 # ── tunables ───────────────────────────────────────────────────────────────────────────────
