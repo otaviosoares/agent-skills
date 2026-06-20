@@ -212,7 +212,9 @@ Two rules make this work:
 ### Builder sub-agent brief (minimal — orchestrator passes only this)
 > Build issue **#N** of `<REPO>` to *merge-ready, not merged*. Read this runbook (`$RUNBOOK`) and the
 > repo recipes (`$LOOP_RECIPES`) for the rules. Steps: (1) `"$LOOP_KIT_DIR"/track view N` → goal/deps.
-> (2) Read acceptance criteria from the plan file; post them as a checklist comment on #N (DoR).
+> (2) Read acceptance criteria from the plan file the issue references, else from the issue body's own
+> Acceptance Criteria checklist (the issue body IS the DoR for a directly-filed/ad-hoc issue); post them
+> as a checklist comment on #N (DoR).
 > **Apply the `## BUILD-CONSTRAINTS` section of `$LOOP_RECIPES` verbatim** (frozen packages to
 > consume-only, design specs binding on UI slices, test requirements, security invariants). (3) Create
 > a worktree/branch `$BRANCH_PREFIX/N-<slug>` off the base branch.

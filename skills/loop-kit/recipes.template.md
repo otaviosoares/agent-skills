@@ -31,7 +31,8 @@ section names, serialize them. ~Stable per-repo. >>
 
 ## BUILD-CONSTRAINTS
 <<FILL: the constraints the BUILDER sub-agent must honor, applied verbatim. e.g. where acceptance
-criteria live (which plan file + section); design specs binding on UI slices (which DESIGN.md / brief,
+criteria live (which plan file + section for planned/wave work; the issue body's own Acceptance Criteria
+checklist for directly-filed/ad-hoc issues); design specs binding on UI slices (which DESIGN.md / brief,
 and which surfaces need a brief before build); how new shared shapes are authored (new owned file, never
 fork a frozen shape); test requirements (unit-test new pure logic); security invariants (auth/RBAC
 step-up on money/impersonation); and the build-time install/lockfile command CI enforces (e.g.

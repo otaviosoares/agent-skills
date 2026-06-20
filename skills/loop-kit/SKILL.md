@@ -1,6 +1,6 @@
 ---
 name: loop-kit
-description: Set up and run a context-bounded, multi-runner autonomous build loop driven by an issue tracker (GitHub, GitLab, or ClickUp). Use when the user wants to stand up an unattended "wave" build loop on a repo, onboard a repo to loop-kit, generate a loop runbook + tracker config, run or resume the loop, migrate an old runbook into recipes + scope, or add a tracker backend. Sub-commands — `init` (onboard a repo, auto-runs first), `config` (edit/add a backend), `plan` (author a wave's backlog as a source tree, compile + validate it), `migrate` (lift a stale runbook copy into loop.recipes.md + loop.scope.md), `run` (launch the loop), `materialize` (stand up a wave's issues). The runbook is a shared SKELETON (loop-runbook.md, in the skill, symlinked + auto-updating) plus two per-repo files the skeleton applies by name: loop.recipes.md (5 ~stable per-repo judgment sections) and loop.scope.md (2 per-wave scope sections). The loop spawns a fresh headless `claude -p` per iteration (flat context), each tracker issue is the lock so N runners never collide, and a backend-agnostic `track` dispatcher seams GitHub, GitLab, and ClickUp (a local-files backend is planned). FAILS LOUD on the per-project judgment sections (contention/merge recipe, land/lockfile recipe, CI-truth carve-out, review lenses) — never auto-fills or auto-commits them.
+description: Set up and run a context-bounded, multi-runner autonomous build loop driven by an issue tracker (GitHub, GitLab, or ClickUp). Use when the user wants to stand up an unattended "wave" build loop on a repo, onboard a repo to loop-kit, generate a loop runbook + tracker config, run or resume the loop (as planned waves OR a standing day-to-day loop), migrate an old runbook into recipes + scope, or add a tracker backend. Sub-commands — `init` (onboard a repo, auto-runs first), `config` (edit/add a backend), `plan` (author a wave's backlog as a source tree, compile + validate it), `migrate` (lift a stale runbook copy into loop.recipes.md + loop.scope.md), `run` (launch the loop), `materialize` (stand up a wave's issues). The runbook is a shared SKELETON (loop-runbook.md, in the skill, symlinked + auto-updating) plus two per-repo files the skeleton applies by name: loop.recipes.md (5 ~stable per-repo judgment sections) and loop.scope.md (2 per-wave scope sections). The loop spawns a fresh headless `claude -p` per iteration (flat context), each tracker issue is the lock so N runners never collide, and a backend-agnostic `track` dispatcher seams GitHub, GitLab, and ClickUp (a local-files backend is planned). FAILS LOUD on the per-project judgment sections (contention/merge recipe, land/lockfile recipe, CI-truth carve-out, review lenses) — never auto-fills or auto-commits them.
 ---
 
 # Loop Kit
@@ -247,6 +247,42 @@ kit dir), `TRACKER_CONFIG` (the repo's `plans/loop.config.sh`), `LOOP_RECIPES` (
 `WAVE` / `BRANCH_PREFIX` into each spawned session. Stop with Ctrl-C
 anytime — state is external, so re-running resumes. The driver tunables (MODEL, EFFORT, MAX_ITERS,
 WAIT_SECONDS, PERMISSION_MODE, …) are documented at the top of `loop-drive.sh`.
+
+## Day-to-day mode — the standing-label preset (post-waves)
+
+Once the planned waves are done, the same loop runs ad-hoc day-to-day work with **no new code** — the
+build → independent-review → regression-tested-fix → land assembly line and the 5 recipes are
+**wave-agnostic**. Convert an onboarded repo to a standing day-to-day loop:
+
+1. **Standing scope, not an advancing wave.** Point `WAVE` (in `plans/loop.config.sh`, via `config`) at a
+   permanent label, e.g. `loop:active`, and create it once on the tracker. The PICK query is just
+   `track sync-list "$WAVE"` — nothing requires the label to be a wave.
+2. **Rewrite `plans/loop.scope.md` once, then leave it.** `## TARGET` = "all OPEN `<label>` issues whose
+   `Dependencies` are closed (most are independent leaves)"; `## KEYSTONES` = `_none_` (ad-hoc work has
+   no spine). `plans/loop.recipes.md` carries over **untouched** — that's the whole reuse win.
+3. **File issues directly** — tracker UI / `track` / the `/qa` skill — **skip `plan`/`materialize`** (the
+   DAG authoring is a batch convenience; PICK reads live). Each issue body MUST carry a **falsifiable
+   Acceptance Criteria checklist** (`` `parseConfig('')` returns `{}`, not throws `` — not "handles empty
+   config gracefully"): that checklist is the independent reviewer's test oracle, and the builder now
+   reads criteria from the issue body when no plan file is referenced (see the builder brief).
+4. **`LAND_MODE=pr`, always, for ad-hoc work against shipped code.** Each item lands as a PR and the loop
+   STOPs short of merge — you are the gate. Reserve `merge` (autonomous push to main) for a deliberately
+   authored, criteria-bearing batch (i.e. a real wave), never for an ad-hoc one-off.
+
+**Single change on demand.** To run just one item through the assembly line, file the issue (with its
+Acceptance Criteria checklist) and `MAX_ITERS=1 ./plans/run-loop.sh` — one full build → review → fix →
+PR pass, then the driver stops. (*Whether* a given ad-hoc change is worth the loop versus a by-hand edit
+is a per-project workflow call — keep that policy in your own repo's docs, not in the kit.)
+
+**Standing-loop hazards (the wave model masked these).**
+- **Merge-debt has no backpressure.** In `pr` mode issues stay OPEN until you merge, and a standing label
+  never reaches `COMPLETE` — so nothing bounds the pile of un-merged agent PRs. Rule: **don't refill the
+  queue while > N issues sit in-review.**
+- **Cost shape.** The driver defaults to `MODEL=opus EFFORT=high` (tuned for unattended wave work). For a
+  stream of small edits set a cheaper profile — `MODEL=sonnet EFFORT=medium ./plans/run-loop.sh` — and
+  reserve opus/high for a deliberate batch.
+- **WIP=1.** One in-progress issue per runner: a single self-paced runner that wedges on a `BLOCKED` item
+  stalls the whole queue until you clear it (or run a second runner).
 
 ## `plan` — author a wave's backlog (the init→materialize bridge)
 
