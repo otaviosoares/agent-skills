@@ -43,7 +43,8 @@ is `${VAR:-default}` so an env override always wins.
 
 `loop.config.sh` keys: `TRACKER_BACKEND` (github|gitlab|clickup — `local` is a planned backend, no
 adapter shipped yet), `LAND_MODE` (merge|pr), `REPO`,
-`RUNLOG`, `WAVE` (default scope label), `BRANCH_PREFIX`, `CLAIM_STRATEGY` (gitlab: assignee|note),
+`RUNLOG`, `WAVE` (default scope label), `BRANCH_PREFIX`, `CLAIM_STRATEGY` (github+gitlab: assignee|note;
+github note REQUIRES a per-agent `RUNNER_ID` — see the lock contract below),
 the optional github `GH_PROJECT*`/`GH_FIELD_*` board block (producer only), and the clickup
 `CLICKUP_TOKEN`/`CLICKUP_LIST_ID`/`CLICKUP_STATUS_DONE`/`CLICKUP_API` block (clickup uses `CLICKUP_LIST_ID`
 as the tracker unit in place of `REPO`, scope/labels are space tags, and `RUNLOG` is a task id).
@@ -62,6 +63,8 @@ The runbook calls these via `"$LOOP_KIT_DIR"/track <verb>`; `TRACKER_BACKEND` se
 | `reconcile-mine <scope>` | my in-progress items (the dangling-claim signal) | state |
 | `branch-merged <branch>` | `yes\|no` — is this branch already on `main` | state |
 | `claim <id>` | **atomic claim → `won\|lost`** — the only lock-critical verb | **lock** |
+| `claim-owner <id>` | note strategy: live owner's claimant id (smallest claimant whose latest marker is a claim), else empty — RECONCILE's shared-login gate | lock |
+| `whoami` | my claimant id in `claim-owner`'s shape (note: `login#RUNNER_ID`; assignee: `login`) | lock |
 | `release <id>` | release my claim (lost race / abort) | lock |
 | `close <id>` | terminal close + remove in-progress (merge mode) | state |
 | `mark-review <id> <url>` | remove in-progress, add in-review, keep assignee, note URL (PR mode) | state |
@@ -78,12 +81,28 @@ comparable claimant id that survives a crash** (so RECONCILE finds a dangling cl
 
 - **GitHub** — add assignee + in-progress label, re-read after a short **stabilization delay**
   (assignees are eventually-consistent — a naive immediate re-read can elect two winners), winner =
-  **case-folded lexicographically-smallest** assignee login. Needs **N distinct logins** (shared
-  account → degrade to a `claimed by <name>` marker). Best-effort CAS, backstopped by the
-  contention-overlap skip at PICK and git's non-fast-forward push rejection at LAND.
+  **case-folded lexicographically-smallest** assignee login. Needs **N distinct logins** in the default
+  `assignee` strategy. Best-effort CAS, backstopped by the contention-overlap skip at PICK and git's
+  non-fast-forward push rejection at LAND.
+  - **`CLAIM_STRATEGY=note`** lets **N agents share ONE login** (claimant id = `login#RUNNER_ID` in a
+    `claimed by …` comment marker). **Two-level CAS:** every runner assigns its login up front, so
+    level-1 is the *same* smallest-assignee-login arbitration as `assignee` mode (the two strategies
+    **interop** on one issue — an assignee runner needs no awareness of note runners); level-2 breaks
+    ties among agents under the winning login by smallest marker id. Comments are append-only, so
+    simultaneous claims don't clobber — the deterministic read picks the winner. **Ownership is
+    identity-based, not timed:** the live owner is the smallest claimant whose *latest* marker is a claim
+    (a `released by …` tombstone retracts it) — so there is **no liveness window and no heartbeat**, a
+    build of any length is safe, and a crashed agent recovers its OWN claim by **reuping with the same
+    `RUNNER_ID`** (`RUNNER_ID` is therefore REQUIRED — it must be stable across restarts and distinct
+    between concurrent agents; note mode refuses to claim without one). **Shared-login RECONCILE** is
+    runner-aware via `claim-owner`/`whoami`: adopt a dangling claim only if the live owner is itself (or
+    none), never a sibling. **Invariant:** a login is wholly one strategy (operator-enforced; mixing
+    strategies under one login double-builds). The git non-fast-forward push at LAND remains the final
+    backstop against a double *merge*.
 - **GitLab** — same, but assignment must be the **additive `+` union** (a bare replace is
   last-writer-wins and unsafe); single-assignee tiers (Free / many self-hosted) → `CLAIM_STRATEGY=note`
-  (note-marker CAS, current-round time-windowed to exclude stale ghost claims).
+  (note-marker CAS — owner = smallest claimant whose latest note is a claim, `released by …` tombstone
+  retracts it; identity-based, no time window, same as github note mode but username-granular).
 - **ClickUp** — same additive-union shape (`{"assignees":{"add":[id]}}`; ClickUp is natively
   multi-assignee, so there is no single-assignee fallback to worry about), re-read after a stabilization
   delay, winner = **numerically-smallest assignee id** (the claimant id is the stable numeric ClickUp
@@ -100,7 +119,7 @@ Shipped backends: **github**, **gitlab**, **clickup**. `local` is designed (belo
 
 ```
 backend          atomic-lock            cross-machine multi-runner    open-PR   deps
-github (gh)      yes (login-sort CAS)   yes (N distinct logins)       yes       issue-body dep list / title convention
+github (gh)      yes (login-sort CAS)   N logins, or note: N/login     yes       issue-body dep list / title convention
 gitlab (glab)    yes (additive-+ CAS)   yes (N distinct users)        yes (MR)  native blocked_by links (stronger)
 clickup (curl)   yes (id-sort CAS)      yes (N distinct tokens)       NO        task-body dep list (ClickUp hosts no code)
 local (planned)  mkdir/O_EXCL or        same-host-N, or cross-machine no        native deps:[id] frontmatter

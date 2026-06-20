@@ -121,8 +121,16 @@ Two rules make this work:
      it got — branch built ⇒ resume at LAND, not a fresh BUILD).
    **(b) Finish a dangling claim.** A prior iteration can be interrupted *after* LAND merged but
    *before* CLOSE/LOG, stranding an issue that is **yours + in-progress but actually done**. List your
-   dangling claims — `"$LOOP_KIT_DIR"/track reconcile-mine <<FILL: scope label >>`; for each, check
-   whether its branch `<<FILL: BRANCH_PREFIX >>/N-<slug>` is already landed —
+   dangling claims — `"$LOOP_KIT_DIR"/track reconcile-mine <<FILL: scope label >>`; for each:
+   - **Shared-login gate (only when `CLAIM_STRATEGY=note`).** `reconcile-mine` keys on the *login*, so
+     under a login shared by several agents it also returns a **sibling's claim** — adopting it would
+     double-build. Before touching the item, run `"$LOOP_KIT_DIR"/track claim-owner N` and compare to
+     `"$LOOP_KIT_DIR"/track whoami`: **proceed only if** the owner **equals your `whoami`** (your own
+     dangling claim — reup with the same `RUNNER_ID` to land here) **or is empty** (no live claim: an
+     assignee-mode claim that left no marker, or all released = yours to finish). If it is a **different
+     non-empty** runner, that sibling owns it (building, or crashed and will reup its own id) → **SKIP
+     this item**, do not build. (In `assignee` mode this gate is a no-op: skip to the branch check.)
+   Then check whether its branch `<<FILL: BRANCH_PREFIX >>/N-<slug>` is already landed —
    `"$LOOP_KIT_DIR"/track branch-merged <<FILL: BRANCH_PREFIX >>/N-<slug>`:
    - **Already merged** → just finish the stranded tail: **CLOSE** (7) + **LOG** (8, mark `reconciled
      after interrupt`). That **is** this iteration's work → stop, emit `CONTINUE`; **don't also PICK**.

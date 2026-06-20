@@ -12,8 +12,8 @@
 # surviving. Mechanism: ADDITIVE assignee union (`--assignee +me`, NOT a bare replace which is
 # last-writer-wins and unsafe) + stabilization re-read + lexicographic username-sort tie-break.
 # On Free tier (single-assignee → union impossible), CLAIM_STRATEGY=note falls back to a note-marker
-# CAS with the same arbitration shape (current-round-windowed so undeletable stale markers can't wedge
-# it — see _claim_note). REQUIRES each runner authed as a DISTINCT glab user.
+# CAS: owner = smallest claimant whose LATEST note is a claim, with a `released by …` tombstone
+# retracting it (identity-based, no time window — see _gl_owner). REQUIRES each runner a DISTINCT glab user.
 #
 # DEPENDENCY: jq (glab has no built-in --jq like gh; read verbs pipe `--output json` through jq).
 # Convention: read verbs print to stdout; mutating verbs are quiet unless they return a value
@@ -156,35 +156,23 @@ _claim_assignee() {
   fi
 }
 
-# Free-tier fallback CAS: in-progress label + a `claimed by <user>` note marker, stabilize, re-read the
-# claim markers, winner = case-folded smallest claimant (computed identically by every racer, so the
-# result is consistent regardless of post order — same shape as github's login-sort). The winner then
-# takes the single assignee slot so reconcile-mine finds it.
-#   ACCRETION HAZARD (notes are not deletable): a released/crashed loser's marker LINGERS forever, so a
-#   naive global lexicographic-min would re-elect a DEPARTED smallest-name ghost on every later round →
-#   zero winners, item permanently wedged. We therefore arbitrate only over the CURRENT round's cohort:
-#   the racers all post within seconds of one PICK (after the sleep both are visible), so we keep only
-#   claim markers within NOTE_CLAIM_WINDOW seconds of the newest claim marker and pick the smallest in
-#   THAT cohort. Stale markers from prior cycles (minutes/hours older) fall outside the window and can't win.
+# Free-tier fallback CAS: in-progress label + a `claimed by <user>` note marker, stabilize, re-read,
+# winner = smallest LIVE claimant (computed identically by every racer, so consistent regardless of post
+# order — same shape as github's login-sort). The winner takes the single assignee slot so reconcile-mine
+# finds it. OWNERSHIP IS IDENTITY-BASED, NO TIME WINDOW (see _gl_owner / cmd_claim_owner): a runner is
+# live iff its LATEST note is a claim, not a `released by …` tombstone — so a long build never looks
+# crashed and a lingering loser/ghost marker can't re-win (its tombstone retracts it; note mode here is
+# distinct-login, so each agent recovers its own claim by reuping the same username).
 #   pid is resolved BEFORE any mutation and guarded: if the notes endpoint is unreachable we yield cleanly
 #   (echo lost, nothing posted) rather than aborting mid-claim under set -e after stamping label+note.
 _claim_note() {
-  local id="$1" me="$2" winner pid window="${NOTE_CLAIM_WINDOW:-120}"
+  local id="$1" me="$2" winner pid
   pid="$(_project_id 2>/dev/null || true)"
   if [[ -z "$pid" ]]; then echo lost; return 0; fi   # can't arbitrate without the notes endpoint → yield; nothing stamped
   if ! _glab issue update "$id" --label in-progress >/dev/null 2>&1; then cmd_release "$id"; echo lost; return 0; fi
   if ! _glab issue note "$id" -m "claimed by $me" >/dev/null 2>&1; then cmd_release "$id"; echo lost; return 0; fi
   sleep 3
-  winner="$(_glab_api "projects/${pid}/issues/${id}/notes?per_page=100" 2>/dev/null \
-    | jq -r --argjson w "$window" '
-        [ .[]
-          | select(.system==false)
-          | select(.body | test("^claimed by "))
-          | { u: (.body | capture("^claimed by (?<u>\\S+)") | .u | ascii_downcase),
-              t: (.created_at | sub("\\.[0-9]+";"") | fromdateiso8601) } ]
-        | if length==0 then "" else (max_by(.t) | .t) as $newest
-          | [ .[] | select(.t >= ($newest - $w)) | .u ] | sort | .[0] // "" end
-      ' 2>/dev/null || true)"
+  winner="$(_gl_owner "$pid" "$id")"
   if [[ -n "$winner" && "$winner" == "$me" ]]; then
     _glab issue update "$id" --assignee "$me" >/dev/null 2>&1 || true   # winner takes the lone assignee slot → reconcile-mine handle
     echo won
@@ -192,6 +180,32 @@ _claim_note() {
     cmd_release "$id"; echo lost
   fi
 }
+
+# Event-based live owner of an issue's claim: smallest claimant whose LATEST note is a claim (a
+# `released by …` tombstone retracts it). No time window — an issue can't be re-claimed while a claim
+# stands (PICK skips in-progress), so every prior claim on a re-claimable issue was released. Notes are
+# fetched ASC so the reduce's last-write-wins per user resolves to that user's latest event.
+_gl_owner() {   # args: pid id → smallest live claimant username, or ""
+  _glab_api "projects/${1}/issues/${2}/notes?per_page=100&sort=asc&order_by=created_at" 2>/dev/null \
+    | jq -r '
+        reduce (.[] | select(.system==false) | select(.body | test("^(claimed|released) by "))
+                 | { who: (.body | capture("^(?:claimed|released) by (?<w>[^ ]+)") | .w | ascii_downcase),
+                     act: (.body | capture("^(?<a>claimed|released)") | .a) }) as $e ({}; .[$e.who]=$e.act)
+        | [ to_entries[] | select(.value=="claimed") | .key ] | sort | .[0] // ""
+      ' 2>/dev/null || true
+}
+
+# Live owner for RECONCILE (github-parity verb; see github.sh:cmd_claim_owner). Empty → no live note
+# claim (assignee-mode, or all released = free) → caller may adopt.
+cmd_claim_owner() {
+  local id="${1:?id required}" pid
+  pid="$(_project_id 2>/dev/null || true)"; [[ -n "$pid" ]] || { echo ""; return 0; }
+  _gl_owner "$pid" "$id"
+}
+
+# My claimant id in cmd_claim_owner's shape — RECONCILE compares the two. GitLab keys on the username
+# under BOTH strategies (note marker = username; assignee = username), so this is the username either way.
+cmd_whoami() { _lc "$(_glab_api user 2>/dev/null | jq -r '.username // empty' 2>/dev/null || true)"; }
 
 # Release my claim (lost race / abort). Additive remove of my assignee (`!me`, not a bare replace) +
 # unlabel in-progress. `!` prefix (not `-me`, which the flag parser could read as an option) removes me.
@@ -207,6 +221,11 @@ cmd_release() {
     return 0
   fi
   _glab issue update "$id" --assignee "!$me" --unlabel in-progress >/dev/null 2>&1 || true
+  # note strategy: drop a `released by <user>` tombstone so a later re-claim isn't mis-attributed to this
+  # now-released claimant (_gl_owner ignores a user whose latest note is a release).
+  if [[ "${CLAIM_STRATEGY:-assignee}" == "note" ]]; then
+    _glab issue note "$id" -m "released by $(_lc "$me")" >/dev/null 2>&1 || true
+  fi
 }
 
 # CLOSE — terminal, merge-mode. Close FIRST (the terminal op); if it fails and aborts, the issue stays
