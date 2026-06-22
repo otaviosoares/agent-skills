@@ -101,13 +101,14 @@ cmd_reconcile_mine() {
     | jq -c '[.[] | {iid, title, labels, assignees: [.assignees[].username]}]'
 }
 
-# Is a branch already merged into main? backend-neutral, keyed on the BRANCH name — GitLab MR iids
-# (!N) are a DIFFERENT sequence from issue iids (#N), so never grep "Merge #N".
+# Is a branch already merged into the base branch? backend-neutral, keyed on the BRANCH name — GitLab
+# MR iids (!N) are a DIFFERENT sequence from issue iids (#N), so never grep "Merge #N". BASE_BRANCH is
+# resolved by `track` (origin/HEAD, not hardcoded main); :-main is a defensive fallback if sourced raw.
 cmd_branch_merged() {
-  local branch="${1:?branch required}"
-  git fetch origin main -q 2>/dev/null || true   # avoid a stale origin/main → false-negative → needless rebuild
-  # merge-commit / rebase landings (merge mode): the branch tip is an ANCESTOR of main.
-  if git branch -r --merged origin/main 2>/dev/null | grep -q "/${branch}\$"; then
+  local branch="${1:?branch required}" base="${BASE_BRANCH:-main}"
+  git fetch origin "$base" -q 2>/dev/null || true   # avoid a stale origin/$base → false-negative → needless rebuild
+  # merge-commit / rebase landings (merge mode): the branch tip is an ANCESTOR of the base branch.
+  if git branch -r --merged "origin/$base" 2>/dev/null | grep -q "/${branch}\$"; then
     echo yes; return 0
   fi
   # squash landings (PR mode; tip is NOT an ancestor): ask GitLab whether an MR for this SOURCE BRANCH merged.
@@ -254,7 +255,7 @@ cmd_log() {
 
 # Open an MR for the built branch (PR/MR mode), print its web_url. Idempotent + fail-loud.
 cmd_open_pr() {
-  local branch="${1:?branch required}" id="${2:?id required}" url
+  local branch="${1:?branch required}" id="${2:?id required}" base="${BASE_BRANCH:-main}" url
   # Idempotent: a prior interrupted run may already have opened the MR — return its url, don't double-create.
   url="$(_glab mr view "$branch" --output json 2>/dev/null | jq -r '.web_url // empty' 2>/dev/null || true)"
   if [[ -n "$url" ]]; then echo "$url"; return 0; fi
@@ -263,10 +264,10 @@ cmd_open_pr() {
   if ! git push -u origin "$branch" >/dev/null 2>&1; then
     echo "✋ open-pr: failed to push '$branch' to origin" >&2; return 1
   fi
-  _glab mr create --source-branch "$branch" --target-branch main --yes \
+  _glab mr create --source-branch "$branch" --target-branch "$base" --yes \
     --title "#${id} — ${branch}" \
     --description "Automated build for #${id}. CI green; awaiting human review/merge." >/dev/null 2>&1 \
-    || _glab mr create --source-branch "$branch" --target-branch main --fill --yes >/dev/null 2>&1 || true
+    || _glab mr create --source-branch "$branch" --target-branch "$base" --fill --yes >/dev/null 2>&1 || true
   url="$(_glab mr view "$branch" --output json 2>/dev/null | jq -r '.web_url // empty' 2>/dev/null || true)"
   if [[ -z "$url" ]]; then echo "✋ open-pr: MR did not open for '$branch'" >&2; return 1; fi
   echo "$url"

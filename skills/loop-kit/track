@@ -45,6 +45,12 @@ elif [[ -f "$HERE/tracker.config.example.sh" ]]; then
 fi
 TRACKER_BACKEND="${TRACKER_BACKEND:-github}"
 
+# 1b) resolve BASE_BRANCH (the integration branch the adapters' branch-merged / open-pr verbs key on).
+#     An explicit env/config value wins; otherwise auto-detect the repo's default branch (origin/HEAD,
+#     not the literal `main`) so a master/trunk repo works. Must run BEFORE the adapter is sourced.
+# shellcheck source=/dev/null
+source "$HERE/resolve-base-branch.sh"
+
 # 2) the selected backend adapter (defines the cmd_* functions).
 ADAPTER="$HERE/adapters/${TRACKER_BACKEND}.sh"
 [[ -f "$ADAPTER" ]] || { echo "✋ no adapter for TRACKER_BACKEND='$TRACKER_BACKEND' (looked for $ADAPTER)" >&2; exit 3; }

@@ -82,12 +82,13 @@ cmd_reconcile_mine() {
     --assignee "@me" --limit 100 --json number,title,labels,assignees
 }
 
-# Is a branch already merged into main? backend-neutral (no gh-shaped "Merge #N"). (wave-loop.md:91)
+# Is a branch already merged into the base branch? backend-neutral (no gh-shaped "Merge #N"). BASE_BRANCH
+# is resolved by `track` (origin/HEAD, not hardcoded main); :-main is a defensive fallback if sourced raw.
 cmd_branch_merged() {
-  local branch="${1:?branch required}"
-  git fetch origin main -q 2>/dev/null || true   # avoid a stale origin/main → false-negative → needless rebuild
-  # merge-commit / rebase landings (what the loop does in merge mode): the branch tip is an ANCESTOR of main.
-  if git branch -r --merged origin/main 2>/dev/null | grep -q "/${branch}\$"; then
+  local branch="${1:?branch required}" base="${BASE_BRANCH:-main}"
+  git fetch origin "$base" -q 2>/dev/null || true   # avoid a stale origin/$base → false-negative → needless rebuild
+  # merge-commit / rebase landings (what the loop does in merge mode): the branch tip is an ANCESTOR of the base branch.
+  if git branch -r --merged "origin/$base" 2>/dev/null | grep -q "/${branch}\$"; then
     echo yes; return 0
   fi
   # squash landings (PR mode; branch tip is NOT an ancestor): ask the host whether its PR merged.
@@ -259,7 +260,7 @@ cmd_log() {
 
 # Open a PR for the built branch (PR/MR mode), print its URL. (new — LAND_MODE=pr)
 cmd_open_pr() {
-  local branch="${1:?branch required}" id="${2:?id required}" url
+  local branch="${1:?branch required}" id="${2:?id required}" base="${BASE_BRANCH:-main}" url
   # Idempotent: a prior interrupted run may already have opened the PR — return its URL, don't double-create.
   url="$(_gh pr view "$branch" --json url --jq .url 2>/dev/null || true)"
   if [[ -n "$url" ]]; then echo "$url"; return 0; fi
@@ -268,10 +269,10 @@ cmd_open_pr() {
   if ! git push -u origin "$branch" >/dev/null 2>&1; then
     echo "✋ open-pr: failed to push '$branch' to origin" >&2; return 1
   fi
-  _gh pr create --head "$branch" --base main \
+  _gh pr create --head "$branch" --base "$base" \
     --title "#${id} — ${branch}" \
     --body "Automated build for #${id}. CI green; awaiting human review/merge." >/dev/null 2>&1 \
-    || _gh pr create --head "$branch" --base main --fill >/dev/null 2>&1 || true
+    || _gh pr create --head "$branch" --base "$base" --fill >/dev/null 2>&1 || true
   url="$(_gh pr view "$branch" --json url --jq .url 2>/dev/null || true)"
   if [[ -z "$url" ]]; then echo "✋ open-pr: PR did not open for '$branch'" >&2; return 1; fi
   echo "$url"

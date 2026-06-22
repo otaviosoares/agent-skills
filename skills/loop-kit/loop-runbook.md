@@ -63,7 +63,7 @@ Sections this skeleton applies: `## TARGET`, `## KEYSTONES` (in `$LOOP_SCOPE`); 
 ## Run it (every runner runs this — self-paced, context-bounded)
 ```
 ./plans/run-loop.sh                                       # defaults to this skeleton + LAND_MODE from loop.config.sh
-LAND_MODE=pr ./plans/run-loop.sh                          # open PRs instead of merging to main
+LAND_MODE=pr ./plans/run-loop.sh                          # open PRs instead of merging to the base branch
 TRACKER_BACKEND=gitlab ./plans/run-loop.sh               # different tracker backend
 ```
 `run-loop.sh` locates the installed loop-kit skill, points RUNBOOK at this skeleton, and spawns a
@@ -92,7 +92,7 @@ Each session runs **exactly one** orchestrator iteration, then prints a status s
 | `LOOP_STATUS=BLOCKED` | a human decision/input is needed | stop with a non-zero code |
 
 > ⚠️ The driver runs `bypassPermissions`. In the default **`LAND_MODE=merge`** the LAND step **merges
-> to `main` unattended** — only run it if you accept an autonomous push to the shared remote. To keep a
+> to the base branch (`$BASE_BRANCH`) unattended** — only run it if you accept an autonomous push to the shared remote. To keep a
 > human gate, set **`LAND_MODE=pr`**: the loop opens a PR/MR and stops short of merging. See the safety
 > notes atop the kit's `loop-drive.sh`.
 
@@ -141,8 +141,9 @@ Two rules make this work:
 ---
 
 ## The orchestrator iteration (what each driver-spawned session does)
-1. **SYNC** — `git fetch origin`; fast-forward the base branch. Derive live state:
-   `"$LOOP_KIT_DIR"/track sync-list "$WAVE"`.
+1. **SYNC** — `git fetch origin`; fast-forward the base branch (**`$BASE_BRANCH`** — exported into your
+   env; it is the repo's default branch, which may be `master`/`trunk`, **not** assumed `main`). Derive
+   live state: `"$LOOP_KIT_DIR"/track sync-list "$WAVE"`.
    Then read the **run-log resume trail** — the last 1–2 entries only (orchestrator hygiene):
    `"$LOOP_KIT_DIR"/track runlog-tail 2`. The last entry records how the previous iteration ended
    (`merged …` / `WAIT` / `BLOCKED`). A trailing **`BLOCKED`** is handled first in RECONCILE (1b-a).
@@ -186,8 +187,8 @@ Two rules make this work:
 5. **REVIEW** — spawn a **fresh, independent reviewer sub-agent** (it did NOT write the code), brief
    below → `{verdict, findings[]}`. If `findings` has **P0/P1** → spawn a **fresh fixer sub-agent**
    (each finding needs a red-without-fix regression test) → re-run REVIEW until `CLEAN`.
-6. **LAND** — in the worktree: rebase on the latest base branch; resolve conflicts per the contention
-   recipe (`## CONTENTION`) above. **RECIPE → `## LAND`** — apply the `## LAND` section of
+6. **LAND** — in the worktree: rebase on the latest base branch (`git rebase "origin/$BASE_BRANCH"`);
+   resolve conflicts per the contention recipe (`## CONTENTION`) above. **RECIPE → `## LAND`** — apply the `## LAND` section of
    `$LOOP_RECIPES` verbatim: the lockfile/dependency reconcile + any supply-chain cooldown, including
    the exact install command CI enforces (so a runner never merges a lockfile that fails it). Do not
    improvise a lockfile resolution. Once **CI is green**, the terminal action depends on **`LAND_MODE`**:

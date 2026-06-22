@@ -144,11 +144,12 @@ cmd_reconcile_mine() {
 
 # Is a branch already merged into the base branch? GIT-ONLY — ClickUp hosts no code, so there is no
 # host-side PR/MR to consult (no squash-landing fallback like github/gitlab). The branch tip being an
-# ANCESTOR of origin/main is the only signal, which is exactly the merge-mode landing shape.
+# ANCESTOR of origin/$BASE_BRANCH is the only signal, which is exactly the merge-mode landing shape.
+# BASE_BRANCH is resolved by `track` (origin/HEAD, not hardcoded main); :-main is a defensive fallback.
 cmd_branch_merged() {
-  local branch="${1:?branch required}"
-  git fetch origin main -q 2>/dev/null || true   # avoid a stale origin/main → false-negative → needless rebuild
-  if git branch -r --merged origin/main 2>/dev/null | grep -q "/${branch}\$"; then
+  local branch="${1:?branch required}" base="${BASE_BRANCH:-main}"
+  git fetch origin "$base" -q 2>/dev/null || true   # avoid a stale origin/$base → false-negative → needless rebuild
+  if git branch -r --merged "origin/$base" 2>/dev/null | grep -q "/${branch}\$"; then
     echo yes; return 0
   fi
   echo no

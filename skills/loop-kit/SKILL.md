@@ -90,7 +90,7 @@ first**, then continue to the requested command. A bare invocation with no argum
 
 ## What this skill does NOT do (the irreducible per-project IP)
 
-The loop runs `bypassPermissions` and, in `merge` mode, **pushes to `main` unattended**. A
+The loop runs `bypassPermissions` and, in `merge` mode, **pushes to the base branch (`$BASE_BRANCH`) unattended**. A
 confidently-wrong recipe is therefore **more dangerous than a blank one**. So:
 
 - **Never auto-fill the judgment recipes.** `plans/loop.recipes.md` holds 5 ~stable per-repo judgment
@@ -165,8 +165,11 @@ skip straight to emit after the confirmation summary.
    - no recognizable remote → ask (it may be a ClickUp-tracked repo on an unrecognized host).
 2. **Emit `plans/loop.config.sh`** from [`tracker.config.example.sh`](tracker.config.example.sh).
    Prompt for / fill: `REPO` (owner/name or group/project), `RUNLOG` (the run-log issue handle —
-   may not exist yet; note it), `BRANCH_PREFIX`, `LAND_MODE` (`merge` = autonomous push to main;
-   `pr` = open a PR and hand off to a human — recommend `pr` unless the user wants full autonomy).
+   may not exist yet; note it), `BRANCH_PREFIX`, `LAND_MODE` (`merge` = autonomous push to the base
+   branch; `pr` = open a PR and hand off to a human — recommend `pr` unless the user wants full
+   autonomy). Leave `BASE_BRANCH` **empty** unless the repo integrates into a non-default branch — it
+   auto-detects the repo's default branch (`origin/HEAD`, falling back to `main`), so a `master`/`trunk`
+   repo needs no config; set it only to pin a specific integration branch (e.g. `develop`).
    For github with a Projects-v2 board, optionally fill the `GH_PROJECT*`/`GH_FIELD_*` block (leave
    unset and board placement is skipped). Keep every value as `${VAR:-default}` so env overrides win.
 3. **Emit the launcher** `plans/run-loop.sh` (the one path a human types that can't use
@@ -249,7 +252,7 @@ provides) before a real run. After migrating: drop the runbook arg (`./plans/run
 
 ```bash
 ./plans/run-loop.sh                                          # default skeleton + LAND_MODE from loop.config.sh
-LAND_MODE=pr ./plans/run-loop.sh                             # open PRs instead of merging to main
+LAND_MODE=pr ./plans/run-loop.sh                             # open PRs instead of merging to the base branch
 TRACKER_BACKEND=gitlab ./plans/run-loop.sh
 ./plans/run-loop.sh plans/custom-loop.md                    # an explicit, non-default runbook (rare)
 ```
@@ -282,7 +285,7 @@ build → independent-review → regression-tested-fix → land assembly line an
    config gracefully"): that checklist is the independent reviewer's test oracle, and the builder now
    reads criteria from the issue body when no plan file is referenced (see the builder brief).
 4. **`LAND_MODE=pr`, always, for ad-hoc work against shipped code.** Each item lands as a PR and the loop
-   STOPs short of merge — you are the gate. Reserve `merge` (autonomous push to main) for a deliberately
+   STOPs short of merge — you are the gate. Reserve `merge` (autonomous push to the base branch) for a deliberately
    authored, criteria-bearing batch (i.e. a real wave), never for an ad-hoc one-off.
 
 **Single change on demand.** To run just one item through the assembly line, file the issue (with its
