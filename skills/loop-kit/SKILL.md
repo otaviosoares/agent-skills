@@ -1,6 +1,22 @@
 ---
 name: loop-kit
-description: Set up and run a context-bounded, multi-runner autonomous build loop driven by an issue tracker (GitHub, GitLab, or ClickUp). Use when the user wants to stand up an unattended "wave" build loop on a repo, onboard a repo to loop-kit, generate a loop runbook + tracker config, run or resume the loop (as planned waves OR a standing day-to-day loop), migrate an old runbook into recipes + scope, or add a tracker backend. Sub-commands — `init` (onboard a repo, auto-runs first), `config` (edit/add a backend), `plan` (author a wave's backlog as a source tree, compile + validate it), `migrate` (lift a stale runbook copy into loop.recipes.md + loop.scope.md), `run` (launch the loop), `materialize` (stand up a wave's issues). The runbook is a shared SKELETON (loop-runbook.md, in the skill, symlinked + auto-updating) plus two per-repo files the skeleton applies by name: loop.recipes.md (5 ~stable per-repo judgment sections) and loop.scope.md (2 per-wave scope sections). The loop spawns a fresh headless `claude -p` per iteration (flat context), each tracker issue is the lock so N runners never collide, and a backend-agnostic `track` dispatcher seams GitHub, GitLab, and ClickUp (a local-files backend is planned). FAILS LOUD on the per-project judgment sections (contention/merge recipe, land/lockfile recipe, CI-truth carve-out, review lenses) — never auto-fills or auto-commits them.
+description: >-
+  Set up and run a context-bounded, multi-runner autonomous build loop driven by an issue
+  tracker (GitHub, GitLab, or ClickUp). Use when the user wants to stand up an unattended
+  "wave" build loop on a repo, onboard a repo to loop-kit, generate a loop runbook + tracker
+  config, run or resume the loop (as planned waves OR a standing day-to-day loop), migrate an
+  old runbook into recipes + scope, or add a tracker backend. Sub-commands — `init` (onboard a
+  repo, auto-runs first), `config` (edit/add a backend), `plan` (author a wave's backlog as a
+  source tree, compile + validate it), `migrate` (lift a stale runbook copy into
+  loop.recipes.md + loop.scope.md), `run` (launch the loop), `materialize` (stand up a wave's
+  issues). The runbook is a shared SKELETON (loop-runbook.md, in the skill, symlinked +
+  auto-updating) plus two per-repo files the skeleton applies by name — loop.recipes.md (5
+  ~stable per-repo judgment sections) and loop.scope.md (2 per-wave scope sections). The loop
+  spawns a fresh headless `claude -p` per iteration (flat context), each tracker issue is the
+  lock so N runners never collide, and a backend-agnostic `track` dispatcher seams GitHub,
+  GitLab, and ClickUp (a local-files backend is planned). FAILS LOUD on the per-project
+  judgment sections (contention/merge recipe, land/lockfile recipe, CI-truth carve-out, review
+  lenses) — never auto-fills or auto-commits them.
 ---
 
 # Loop Kit
