@@ -11,7 +11,7 @@ DRIVER (loop-drive.sh)  — stateless; spawns a fresh headless `claude -p` per i
   └─ ORCHESTRATOR (one fresh session per iteration — thin, short-lived)
        re-derive state from the tracker → RECONCILE any dangling claim → PICK + CLAIM one issue
        → BUILDER sub-agent (fresh ctx) → REVIEWER sub-agent (fresh, independent) → [FIXER if P0/P1]
-       → LAND (merge to main, or open a PR) → CLOSE/mark-review → run-log → print sentinel + STOP
+       → LAND (merge to base branch, or open a PR) → CLOSE/mark-review → run-log → print sentinel + STOP
 ```
 
 Two invariants make it resumable after any crash/restart/summarization:
@@ -69,13 +69,19 @@ always wins.
   real env** (`set -a; . "$TRACKER_CONFIG"; set +a`) so the skeleton's `"$WAVE"` and `"$BRANCH_PREFIX/…"`
   references resolve in the agent's bash calls. Because the config uses `${VAR:-default}`, a value pre-set
   on the launch (e.g. `WAVE=wave:6 ./plans/run-loop.sh`) still **wins** — sourcing respects it.
+- `BASE_BRANCH` — the integration branch (rebase target, merge/PR base, the `branch-merged` check). Both
+  the driver and `track` source `resolve-base-branch.sh` **after** the config, so an explicit
+  env/config value wins; otherwise it auto-detects the repo's default branch (`origin/HEAD`, probing
+  `main`/`master`/`trunk`, ultimately `main`). The agent's own `git rebase`/`merge` and the adapters all
+  read the **same** exported value — so a `master`/`trunk` repo is no longer mis-targeted as `main`.
 
 Each of `TRACKER_CONFIG` / `LOOP_RECIPES` / `LOOP_SCOPE` honors a pre-set env value (the driver only
 defaults them).
 
 `loop.config.sh` keys: `TRACKER_BACKEND` (github|gitlab|clickup — `local` is a planned backend, no
 adapter shipped yet), `LAND_MODE` (merge|pr), `REPO`,
-`RUNLOG`, `WAVE` (default scope label), `BRANCH_PREFIX`, `CLAIM_STRATEGY` (github+gitlab: assignee|note;
+`RUNLOG`, `WAVE` (default scope label), `BRANCH_PREFIX`, `BASE_BRANCH` (empty = auto-detect the repo's
+default branch; set to pin a non-default integration branch), `CLAIM_STRATEGY` (github+gitlab: assignee|note;
 github note REQUIRES a per-agent `RUNNER_ID` — see the lock contract below),
 the optional github `GH_PROJECT*`/`GH_FIELD_*` board block (producer only), and the clickup
 `CLICKUP_TOKEN`/`CLICKUP_LIST_ID`/`CLICKUP_STATUS_DONE`/`CLICKUP_API` block (clickup uses `CLICKUP_LIST_ID`
@@ -93,7 +99,7 @@ The runbook calls these via `"$LOOP_KIT_DIR"/track <verb>`; `TRACKER_BACKEND` se
 | `view <id>` | one item's body + labels + state + assignees | state |
 | `item-state <id>` | `open\|closed` (the dep gate) | state |
 | `reconcile-mine <scope>` | my in-progress items (the dangling-claim signal) | state |
-| `branch-merged <branch>` | `yes\|no` — is this branch already on `main` | state |
+| `branch-merged <branch>` | `yes\|no` — is this branch already on the base branch (`$BASE_BRANCH`) | state |
 | `claim <id>` | **atomic claim → `won\|lost`** — the only lock-critical verb | **lock** |
 | `claim-owner <id>` | note strategy: live owner's claimant id (smallest claimant whose latest marker is a claim), else empty — RECONCILE's shared-login gate | lock |
 | `whoami` | my claimant id in `claim-owner`'s shape (note: `login#RUNNER_ID`; assignee: `login`) | lock |
@@ -164,9 +170,9 @@ against whatever code host — GitHub/GitLab/etc — the repo's `origin` points 
 
 ## LAND_MODE
 
-- **`merge` (default):** after rebase/regenerate/CI-green, the agent **merges to `main`** then
-  `track close <id>`. Fully autonomous; dependents unblock immediately (the dep-gate keys on *closed*
-  ⇒ code is on `main`).
+- **`merge` (default):** after rebase/regenerate/CI-green, the agent **merges to the base branch**
+  (`$BASE_BRANCH`) then `track close <id>`. Fully autonomous; dependents unblock immediately (the
+  dep-gate keys on *closed* ⇒ code is on the base branch).
 - **`pr`:** after CI-green, `track open-pr <branch> <id>` opens a PR/MR and prints the URL, then
   `track mark-review <id> <url>` — **do NOT close**. The issue stays open + assigned + in-review, so
   dependents WAIT until a human merges and closes. Trades full autonomy for a human merge gate.

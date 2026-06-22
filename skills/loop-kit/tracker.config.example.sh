@@ -15,7 +15,7 @@
 # a `local` backend is planned but ships no adapter yet — selecting it fails loud).
 export TRACKER_BACKEND="${TRACKER_BACKEND:-github}"
 
-# Landing policy: merge = merge to main unattended (autonomous); pr = open a PR/MR + hand off to a human.
+# Landing policy: merge = merge to the base branch unattended (autonomous); pr = open a PR/MR + hand off to a human.
 # NOTE: clickup hosts no code → it supports merge ONLY (can_open_pr=false). LAND_MODE=pr fails loud there.
 export LAND_MODE="${LAND_MODE:-merge}"
 
@@ -32,6 +32,12 @@ export WAVE="${WAVE:-wave:1}"
 # Branch / worktree naming. Must stay consistent — RECONCILE's "is it landed?" check greps on it,
 # and it is backend-neutral (avoid host-shaped "Merge #N", which breaks on GitLab's !N MR iids).
 export BRANCH_PREFIX="${BRANCH_PREFIX:-<prefix>}"
+
+# Integration branch: the loop's rebase target, merge/PR/MR base, and the "is it landed?" check.
+# LEAVE EMPTY to auto-detect this repo's default branch (origin/HEAD, falling back to main) — so a
+# repo whose default is master/trunk works without any config. Set it explicitly only to pin a
+# specific integration branch, e.g. a release train: BASE_BRANCH=develop.
+export BASE_BRANCH="${BASE_BRANCH:-}"
 
 # Claim mechanism (github + gitlab). assignee (default) = add-assignee + login-sort CAS; REQUIRES each
 # runner a DISTINCT login. note = comment-marker CAS that lets N agents SHARE ONE login (e.g. a teammate

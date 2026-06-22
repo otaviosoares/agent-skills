@@ -122,6 +122,13 @@ export LOOP_SCOPE="${LOOP_SCOPE:-$REPO_ROOT/plans/loop.scope.md}"
 # exports into the driver's real environment.)
 [[ -f "$TRACKER_CONFIG" ]] && { set -a; . "$TRACKER_CONFIG"; set +a; }
 
+# Resolve + export BASE_BRANCH (the loop's integration branch) so the spawned session's own git
+# rebase/merge targets the repo's real default branch — not the literal `main` — when the config left
+# it unset. Same resolver `track` uses, so the driver, the agent, and the adapters all agree. (We're
+# at REPO_ROOT here, so origin/HEAD detection resolves against the target repo.)
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/resolve-base-branch.sh"
+
 # ── preflight: CLAIM_STRATEGY=note requires a per-agent RUNNER_ID — fail at LAUNCH, not mid-iteration ──
 # Resolve the effective strategy the way `track` will (env wins; else the config's default), by sourcing
 # the config in a subshell so we read its value without polluting the driver's env. Then refuse to spawn

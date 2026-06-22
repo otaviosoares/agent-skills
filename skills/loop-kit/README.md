@@ -75,7 +75,7 @@ If you invoke `config`/`plan`/`run`/`materialize` before the repo is onboarded, 
 See [SKILL.md](SKILL.md). The contract (verbs, the lock guarantees, the capability matrix, the
 producer) is in [REFERENCE.md](REFERENCE.md).
 
-> **Safety:** the loop runs `bypassPermissions` and, in `merge` mode, pushes to `main` unattended. The
+> **Safety:** the loop runs `bypassPermissions` and, in `merge` mode, pushes to the repo's base branch unattended. The
 > skill never auto-fills the judgment blocks, never authors the dependency graph, and never
 > auto-commits — a confidently-wrong auto-runbook is more dangerous than a blank one.
 
