@@ -268,7 +268,7 @@ cmd_open_pr() {
   # human merge IS the close (the PR-mode dep-gate keys on closed; nothing in the loop closes an
   # in-review issue). Fires only when target==default branch; the --fill fallback carries no keyword,
   # so a degraded create lands without auto-close and needs a manual `track close`.
-  _glab mr create --source-branch "$branch" --target-branch main --yes \
+  _glab mr create --source-branch "$branch" --target-branch "$base" --yes \
     --title "#${id} — ${branch}" \
     --description "Automated build for #${id}. Closes #${id}. CI green; awaiting human review/merge." >/dev/null 2>&1 \
     || _glab mr create --source-branch "$branch" --target-branch "$base" --fill --yes >/dev/null 2>&1 || true

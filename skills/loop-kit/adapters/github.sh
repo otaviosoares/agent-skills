@@ -273,7 +273,7 @@ cmd_open_pr() {
   # human merge IS the close (the PR-mode dep-gate keys on closed; nothing in the loop closes an
   # in-review issue). Fires only when base==default branch; the --fill fallback carries no keyword,
   # so a degraded create lands without auto-close and needs a manual `track close`.
-  _gh pr create --head "$branch" --base main \
+  _gh pr create --head "$branch" --base "$base" \
     --title "#${id} — ${branch}" \
     --body "Automated build for #${id}. Closes #${id}. CI green; awaiting human review/merge." >/dev/null 2>&1 \
     || _gh pr create --head "$branch" --base "$base" --fill >/dev/null 2>&1 || true
