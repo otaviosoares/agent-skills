@@ -64,6 +64,25 @@ export CLAIM_STRATEGY="${CLAIM_STRATEGY:-assignee}"
 # (gitlab note mode is username-granular and ignores RUNNER_ID.) No time windows: a build of any length is
 # safe, and git's non-fast-forward push remains the final backstop against a double merge.
 
+# ── GitLab (glab CLI; TRACKER_BACKEND=gitlab) ───────────────────────────────────────────────────
+# RUN THE LOOP UNDER ITS OWN IDENTITY. The REVIEW-RESPONSE phase is self-limiting on the glab username
+# — it tells "my replies" from "human feedback" purely by author. If the loop and the human reviewer
+# share ONE glab account, every human comment reads as the bot's own and `reviews-pending` is always
+# empty. So auth the loop as a DISTINCT identity (a project/group access token — scope api, role
+# Developer; or a second user's PAT) and review as yourself. glab honors GITLAB_TOKEN and it overrides
+# ~/.config/glab-cli, so setting it HERE binds the bot identity to the loop (via TRACKER_CONFIG) without
+# touching your interactive glab. (Solo is fine: the issue is assigned to the bot; you review as you.)
+# export GITLAB_TOKEN="${GITLAB_TOKEN:-glpat-xxx}"   # the loop's bot identity (prefer the secrets file below — keep tokens out of git)
+# export GITLAB_HOST="${GITLAB_HOST:-}"              # self-hosted host (e.g. gitlab.example.com); empty = gitlab.com
+#
+# Keep the token OUT of git: put `export GITLAB_TOKEN=glpat-…` in an UNTRACKED sibling file and source
+# it. The `if` guard makes a MISSING file a clean no-op — never an error, even under `set -e` (unlike a
+# `&& source` chain, whose failed test can trip errexit):
+#   echo 'plans/loop.secrets.sh' >> .gitignore        # then put `export GITLAB_TOKEN=glpat-…` inside it
+# if [[ -f "$(dirname "${BASH_SOURCE[0]}")/loop.secrets.sh" ]]; then
+#   source "$(dirname "${BASH_SOURCE[0]}")/loop.secrets.sh"
+# fi
+
 # ── ClickUp (REST API v2; TRACKER_BACKEND=clickup) ──────────────────────────────────────────────
 # ClickUp has no official CLI — the adapter curls the API with a raw `pk_…` personal token. The tracker
 # unit is a LIST (not owner/repo); scope/labels are space TAGS; open|closed is the status TYPE. ClickUp

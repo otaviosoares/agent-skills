@@ -206,6 +206,16 @@ advance that high-water). An interrupted responder is safe: already-answered ite
 addresses only the remainder. `reviews-pending` keys on the **assignee**, so each runner drains its own
 PRs; under a shared login (`CLAIM_STRATEGY=note`) two agents could both pick one PR — harmless
 (idempotent + self-limiting), but run the responder single-runner if the double-effort matters.
+
+**The loop must run under its own tracker identity.** Self-limiting keys on the gh/glab username, so if
+the loop authenticates as the *same* account that leaves the review feedback, every comment reads as the
+bot's own and `reviews-pending` is permanently empty (also: the issue's assignee must be the loop's
+identity, or it never enters `reviews-pending` at all). Run the loop as a distinct identity and review
+as yourself — GitHub: a bot or second login; GitLab: a project/group access token (or a second user's
+PAT) exported as `GITLAB_TOKEN` from `plans/loop.config.sh` (glab honors it over `~/.config/glab-cli`,
+so it binds to the loop, not your interactive shell). Keep the token out of git via an untracked
+`plans/loop.secrets.sh` sourced with an `if [[ -f … ]]` guard (a missing file stays a clean no-op).
+
 **Backends:** github + gitlab (`can_respond_to_reviews=true`); clickup hosts no PRs so the phase is a
 no-op there (`reviews-pending` returns empty; it is also gated off by clickup's merge-only `LAND_MODE`).
 Set `REVIEW_RESPONSE=off` to keep the pure human-only gate.
