@@ -291,11 +291,15 @@ cmd_open_pr() {
 _mr_for() {
   local id="${1:?id required}"
   # Literal prefix match via jq `startswith` with --arg (NOT test()/regex) so a BRANCH_PREFIX with a
-  # regex metachar or quote can neither break the filter nor mis-match. 2>/dev/null + trailing || true:
-  # a transient list failure yields "" (no MR), never aborts the dispatcher under set -e mid-iteration
-  # (reviews-pending's no-feedback path assigns this in a sub).
-  _glab mr list --state opened --per-page 200 --output json 2>/dev/null \
-    | jq -r --arg bp "$BRANCH_PREFIX" --arg id "$id" \
+  # regex metachar or quote can neither break the filter nor mis-match. `${BRANCH_PREFIX%/}` strips a
+  # trailing slash so a `loop/`-style config can't build a `loop//N-` prefix that never matches a real
+  # `loop/N-…` branch. NO --state flag: `opened` is glab's DEFAULT, and `--state` is NOT a valid
+  # `glab mr list` flag — passing it errors ("Unknown flag: --state"), 2>/dev/null swallows the error,
+  # and the verb silently returns no MR (so reviews-pending/review-read find nothing for EVERY issue).
+  # 2>/dev/null + trailing || true: a transient list failure yields "" (no MR), never aborts the
+  # dispatcher under set -e mid-iteration (reviews-pending's no-feedback path assigns this in a sub).
+  _glab mr list --per-page 200 --output json 2>/dev/null \
+    | jq -r --arg bp "${BRANCH_PREFIX%/}" --arg id "$id" \
         '[.[] | select(.source_branch | startswith($bp+"/"+$id+"-")) | .iid] | first // empty' 2>/dev/null || true
 }
 
@@ -360,7 +364,7 @@ cmd_review_read() {
   [[ -n "$me" ]] || { echo "✋ review-read: cannot resolve glab username (is glab authed / GITLAB_HOST set?)" >&2; return 1; }
   pid="$(_project_id 2>/dev/null || true)"; [[ -n "$pid" ]] || { echo "✋ review-read: cannot resolve project id" >&2; return 1; }
   iid="$(_mr_for "$id")"
-  [[ -n "$iid" ]] || { echo "✋ review-read: no open MR for #$id (source branch ${BRANCH_PREFIX}/${id}-…)" >&2; return 1; }
+  [[ -n "$iid" ]] || { echo "✋ review-read: no open MR for #$id (source branch ${BRANCH_PREFIX%/}/${id}-…)" >&2; return 1; }
   g="$(_mr_norm "$pid" "$iid" 2>/dev/null || true)"
   [[ -n "$g" ]] || { echo "✋ review-read: could not fetch discussions for MR !$iid (transient glab error?)" >&2; return 1; }
   meta="$(_glab mr view "$iid" --output json 2>/dev/null | jq '{branch:.source_branch, base:.target_branch, url:.web_url}' 2>/dev/null || echo '{}')"
