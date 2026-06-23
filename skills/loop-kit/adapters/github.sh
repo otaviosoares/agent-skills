@@ -47,6 +47,7 @@ cmd_caps() {
 backend=github
 cross_machine_atomic_claim=true
 can_open_pr=true
+can_respond_to_reviews=true
 land_modes=merge,pr
 EOF
 }
@@ -280,6 +281,147 @@ cmd_open_pr() {
   url="$(_gh pr view "$branch" --json url --jq .url 2>/dev/null || true)"
   if [[ -z "$url" ]]; then echo "✋ open-pr: PR did not open for '$branch'" >&2; return 1; fi
   echo "$url"
+}
+
+# ── REVIEW-RESPONSE (PR mode) — drain human review feedback on an already-open PR ────────────────
+# The loop opens a PR (open-pr) and parks the issue in-review; without these verbs nothing ever reads
+# the human's comments. These let the orchestrator pick an in-review PR that has UNADDRESSED feedback,
+# hand it to a responder sub-agent, and reply inline. Actionability is SELF-LIMITING: a thread needs
+# work iff its LAST comment is a human's — once the bot replies, its own comment is last, so the thread
+# drops out (no global high-water marker, no infinite loop). Conversation-level feedback (a PR comment
+# or a review body, which is not an inline thread) uses a timestamp high-water: a human event newer than
+# the bot's latest commit/comment on the PR. "me" = my gh login = the bot; a reviewer under the SAME
+# login reads as self (multi-runner already requires distinct logins — see the lock contract).
+
+# Resolve the OPEN PR number for issue #N by its branch convention ($BRANCH_PREFIX/N-<slug>) — a
+# slug-agnostic prefix match, so the lister needs no slug (parity with branch-merged keying on the
+# branch name). $BRANCH_PREFIX is treated as a regex prefix (fine for the usual [a-z0-9/-] prefixes).
+# Empty → no open PR for this issue.
+_pr_for() {
+  local id="${1:?id required}"
+  # Literal prefix match via jq `startswith` with --arg (NOT test()/regex) so a BRANCH_PREFIX with a
+  # regex metachar or quote can neither break the filter nor mis-match. 2>/dev/null + trailing || true:
+  # a transient list failure must yield "" (no PR), never abort the dispatcher under set -e mid-iteration
+  # (reviews-pending's common no-feedback path assigns this in a command sub).
+  _gh pr list --state open --limit 200 --json number,headRefName 2>/dev/null \
+    | jq -r --arg bp "$BRANCH_PREFIX" --arg id "$id" \
+        '[.[] | select(.headRefName | startswith($bp+"/"+$id+"-")) | .number] | first // empty' 2>/dev/null || true
+}
+
+# One GraphQL round-trip → a PR's review threads + conversation, normalized. Shape (logins lowercased):
+#   { commits:[iso…], reviews:[{author,body,state,at}], comments:[{author,body,at}],
+#     threads:[{isResolved, reply_to, path, line, last_author, comments:[{author,body,at}]}] }
+# reply_to = the thread's FIRST review-comment databaseId — the id the REST "replies" endpoint keys on.
+# Shared by _pr_actionable (boolean) and cmd_review_read (detail) so the two can't drift.
+# Paging: the OUTER reviews/comments/reviewThreads use last:100 so the NEWEST feedback is always in scope
+# (first:100 would return the oldest and silently miss recent comments on a busy PR); the INNER thread
+# comments use first:100 so nodes[0] is the true ROOT comment (its databaseId = reply_to).
+_pr_graphql() {
+  local pr="${1:?pr required}" owner name
+  owner="${REPO%%/*}"; name="${REPO##*/}"
+  # -f forces String vars (owner/name); -F types pr as Int (gh auto-types numeric -F values).
+  gh api graphql -f owner="$owner" -f name="$name" -F pr="$pr" -f query='
+    query($owner:String!,$name:String!,$pr:Int!){
+      repository(owner:$owner,name:$name){
+        pullRequest(number:$pr){
+          commits(last:100){nodes{commit{committedDate}}}
+          reviews(last:100){nodes{author{login} body state submittedAt}}
+          comments(last:100){nodes{author{login} body createdAt}}
+          reviewThreads(last:100){nodes{
+            isResolved
+            comments(first:100){nodes{databaseId author{login} body createdAt path line}}}}}}}' \
+    --jq '
+      .data.repository.pullRequest as $pr
+      | { commits: [ $pr.commits.nodes[].commit.committedDate ],
+          reviews: [ $pr.reviews.nodes[] | {author:((.author.login//"")|ascii_downcase), body, state, at:.submittedAt} ],
+          comments:[ $pr.comments.nodes[] | {author:((.author.login//"")|ascii_downcase), body, at:.createdAt} ],
+          threads: [ $pr.reviewThreads.nodes[]
+                     | { isResolved,
+                         reply_to: (.comments.nodes[0].databaseId // null),
+                         path: (.comments.nodes[0].path // null),
+                         line: (.comments.nodes[0].line // null),
+                         last_author: ((.comments.nodes[-1].author.login // "")|ascii_downcase),
+                         comments: [ .comments.nodes[] | {author:((.author.login//"")|ascii_downcase), body, at:.createdAt} ] } ] }'
+}
+
+# Does this PR have actionable feedback for me? → yes|no. (unresolved thread whose last comment isn't
+# mine) OR (a human comment/review newer than my latest commit/comment). max-of-empty is null in jq, and
+# null sorts lowest, so "no bot activity yet" makes any human event actionable — the desired default.
+_pr_actionable() {
+  local pr="$1" me="$2" g
+  g="$(_pr_graphql "$pr" 2>/dev/null || true)"
+  [[ -n "$g" ]] || { echo no; return 0; }
+  if printf '%s' "$g" | jq -e --arg me "$me" '
+      ( ([ .commits[] ] + [ .comments[]|select(.author==$me)|.at ] + [ .reviews[]|select(.author==$me)|.at ])
+        | map(select(.!=null)) | (if length>0 then max else null end) ) as $bot
+      | ( [ .threads[] | select(.isResolved|not) | select(.last_author!=$me) | select(.reply_to!=null) ] | length > 0 )
+        or ( [ (.comments[]|select(.author!=$me)|.at),
+               (.reviews[]|select(.author!=$me)|select(((.body|length)>0) or .state=="CHANGES_REQUESTED")|.at) ]
+             | map(select(.!=null)) | (if length>0 then max else null end) as $h
+             | ($h!=null) and (($bot==null) or ($h>$bot)) )
+    ' >/dev/null 2>&1; then echo yes; else echo no; fi
+}
+
+# REVIEWS-PENDING — my in-review issues in scope whose PR has actionable feedback → [{number,title,pr}].
+# Empty [] → nothing to drain → the orchestrator falls through to PICK.
+cmd_reviews_pending() {
+  local scope="${1:?scope label required}" me out='[]' issues num title pr
+  me="$(_lc "$(gh api user --jq .login 2>/dev/null || true)")"
+  # Without my own login I can't tell my replies from a human's (self-limiting breaks) — report nothing
+  # pending rather than spuriously flag; the next iteration retries once gh auth is back.
+  [[ -n "$me" ]] || { echo '[]'; return 0; }
+  issues="$(_gh issue list --label "$scope" --label in-review --assignee "@me" --state open --limit 200 --json number,title 2>/dev/null || echo '[]')"
+  while IFS=$'\t' read -r num title; do
+    [[ -n "$num" ]] || continue
+    pr="$(_pr_for "$num")"; [[ -n "$pr" ]] || continue
+    [[ "$(_pr_actionable "$pr" "$me")" == "yes" ]] || continue
+    out="$(jq -nc --argjson a "$out" --argjson n "$num" --arg t "$title" --argjson p "$pr" '$a + [{number:$n,title:$t,pr:$p}]')"
+  done < <(printf '%s' "$issues" | jq -r '.[] | "\(.number)\t\(.title)"')
+  printf '%s\n' "$out"
+}
+
+# REVIEW-READ — the feedback the responder sub-agent acts on for issue #N. Only ACTIONABLE items:
+# unresolved threads whose last comment isn't mine, plus one aggregate conversation item (human PR
+# comments / review bodies newer than my high-water) carrying reply_to:"conversation".
+cmd_review_read() {
+  local id="${1:?id required}" me pr g meta
+  me="$(_lc "$(gh api user --jq .login 2>/dev/null || true)")"
+  [[ -n "$me" ]] || { echo "✋ review-read: cannot resolve gh login (is gh authed?)" >&2; return 1; }
+  pr="$(_pr_for "$id")"
+  [[ -n "$pr" ]] || { echo "✋ review-read: no open PR for #$id (branch ${BRANCH_PREFIX}/${id}-…)" >&2; return 1; }
+  g="$(_pr_graphql "$pr" 2>/dev/null || true)"
+  [[ -n "$g" ]] || { echo "✋ review-read: could not fetch review data for PR #$pr (transient gh error?)" >&2; return 1; }
+  meta="$(_gh pr view "$pr" --json headRefName,baseRefName,url 2>/dev/null || echo '{}')"
+  printf '%s' "$g" | jq --argjson pr "$pr" --arg me "$me" --argjson meta "$meta" '
+    ( ([ .commits[] ] + [ .comments[]|select(.author==$me)|.at ] + [ .reviews[]|select(.author==$me)|.at ])
+      | map(select(.!=null)) | (if length>0 then max else null end) ) as $bot
+    | { pr:$pr, branch:($meta.headRefName//null), base:($meta.baseRefName//null), url:($meta.url//null),
+        items: (
+          [ .threads[] | select(.isResolved|not) | select(.last_author!=$me) | select(.reply_to!=null)
+            | {kind:"thread", reply_to:.reply_to, path, line, conversation:[.comments[]|{author,body}]} ]
+          + ( [ (.comments[]|select(.author!=$me)|select(($bot==null) or (.at>$bot))|{author,body}),
+                (.reviews[]|select(.author!=$me)|select(((.body|length)>0) or .state=="CHANGES_REQUESTED")|select(($bot==null) or (.at>$bot))|{author,body:.body}) ]
+              | if length>0 then [ {kind:"comment", reply_to:"conversation", conversation:.} ] else [] end )
+        ) }'
+}
+
+# REVIEW-REPLY — post the responder's answer. reply_to="conversation" → a PR comment; else a databaseId
+# from review-read → an inline reply under that thread (REST replies endpoint). Quiet on success.
+cmd_review_reply() {
+  local id="${1:?id required}" ref="${2:?reply_to token required (a thread id from review-read, or 'conversation')}" body="${3:?body required}" pr owner name
+  pr="$(_pr_for "$id")"
+  [[ -n "$pr" ]] || { echo "✋ review-reply: no open PR for #$id" >&2; return 1; }
+  if [[ "$ref" == "conversation" ]]; then
+    _gh pr comment "$pr" --body "$body" >/dev/null
+  elif [[ "$ref" =~ ^[0-9]+$ ]]; then
+    owner="${REPO%%/*}"; name="${REPO##*/}"
+    gh api "repos/${owner}/${name}/pulls/${pr}/comments/${ref}/replies" -f body="$body" >/dev/null
+  else
+    # A thread token from review-read is always a numeric databaseId or the literal "conversation";
+    # anything else (e.g. a null that slipped through) would POST to /comments/null/replies and fail.
+    echo "✋ review-reply: invalid reply_to '$ref' (expected a numeric thread token or 'conversation')" >&2
+    return 1
+  fi
 }
 
 # Board projection — convenience only; the loop reads NOTHING from the board (wave-loop.md:7).

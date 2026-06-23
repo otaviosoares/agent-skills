@@ -44,6 +44,7 @@ cmd_caps() {
 backend=gitlab
 cross_machine_atomic_claim=true
 can_open_pr=true
+can_respond_to_reviews=true
 land_modes=merge,pr
 EOF
 }
@@ -275,6 +276,117 @@ cmd_open_pr() {
   url="$(_glab mr view "$branch" --output json 2>/dev/null | jq -r '.web_url // empty' 2>/dev/null || true)"
   if [[ -z "$url" ]]; then echo "✋ open-pr: MR did not open for '$branch'" >&2; return 1; fi
   echo "$url"
+}
+
+# ── REVIEW-RESPONSE (PR/MR mode) — drain human review feedback on an already-open MR ──────────────
+# Mirrors github.sh's review verbs verb-for-verb (same {number,title,pr} / {items[]} / reply_to shapes),
+# so the runbook is identical. GitLab feedback lives in MR DISCUSSIONS: a resolvable discussion = an
+# inline diff thread; an individual/non-resolvable note = a conversation comment. Actionability is the
+# SAME self-limiting rule as github (a thread needs work iff its last note isn't mine; conversation uses
+# a commit/comment timestamp high-water). reply_to for a thread = the DISCUSSION id (the notes endpoint
+# keys on it). "me" = my glab username = the bot; a reviewer under the SAME username reads as self.
+
+# Resolve the OPEN MR iid for issue #N by its source-branch convention ($BRANCH_PREFIX/N-<slug>) — a
+# slug-agnostic prefix match (parity with github's _pr_for / branch-merged). Empty → no open MR.
+_mr_for() {
+  local id="${1:?id required}"
+  # Literal prefix match via jq `startswith` with --arg (NOT test()/regex) so a BRANCH_PREFIX with a
+  # regex metachar or quote can neither break the filter nor mis-match. 2>/dev/null + trailing || true:
+  # a transient list failure yields "" (no MR), never aborts the dispatcher under set -e mid-iteration
+  # (reviews-pending's no-feedback path assigns this in a sub).
+  _glab mr list --state opened --per-page 200 --output json 2>/dev/null \
+    | jq -r --arg bp "$BRANCH_PREFIX" --arg id "$id" \
+        '[.[] | select(.source_branch | startswith($bp+"/"+$id+"-")) | .iid] | first // empty' 2>/dev/null || true
+}
+
+# One MR's discussions + commits, normalized to github's _pr_graphql shape (logins lowercased) so the
+# actionable/read jq is parallel. threads = resolvable diff discussions; comments = the rest (human notes).
+# GitLab has no separate "reviews" object → reviews is implicitly empty (conversation = notes only).
+_mr_norm() {
+  local pid="$1" iid="$2" disc commits
+  disc="$(_glab_api --paginate "projects/${pid}/merge_requests/${iid}/discussions?per_page=100" 2>/dev/null | jq -s 'add // []')"
+  commits="$(_glab_api --paginate "projects/${pid}/merge_requests/${iid}/commits?per_page=100" 2>/dev/null | jq -s 'add // []')"
+  jq -n --argjson d "${disc:-[]}" --argjson c "${commits:-[]}" '
+    { commits: [ $c[].created_at ],
+      comments: [ $d[] | select((any(.notes[]; .resolvable))|not) | .notes[] | select(.system==false)
+                  | {author:((.author.username//"")|ascii_downcase), body, at:.created_at} ],
+      threads: [ $d[] | select(any(.notes[]; .resolvable))
+                 | (.notes | map(select(.system==false))) as $ns
+                 | { isResolved: ( [ .notes[] | select(.resolvable) | .resolved ] | all ),
+                     reply_to: .id,
+                     path: ($ns[0].position.new_path // null),
+                     line: ($ns[0].position.new_line // null),
+                     last_author: (($ns[-1].author.username // "")|ascii_downcase),
+                     comments: [ $ns[] | {author:((.author.username//"")|ascii_downcase), body, at:.created_at} ] } ] }'
+}
+
+# Does this MR have actionable feedback for me? → yes|no. Same logic as github's _pr_actionable, minus
+# the reviews channel (GitLab has none). max-of-empty is null (sorts lowest) → first human event wins.
+_mr_actionable() {
+  local pid="$1" iid="$2" me="$3" g
+  g="$(_mr_norm "$pid" "$iid" 2>/dev/null || true)"
+  [[ -n "$g" ]] || { echo no; return 0; }
+  if printf '%s' "$g" | jq -e --arg me "$me" '
+      ( ([ .commits[] ] + [ .comments[]|select(.author==$me)|.at ]) | map(select(.!=null)) | (if length>0 then max else null end) ) as $bot
+      | ( [ .threads[] | select(.isResolved|not) | select(.last_author!=$me) ] | length > 0 )
+        or ( [ .comments[]|select(.author!=$me)|.at ] | map(select(.!=null)) | (if length>0 then max else null end) as $h
+             | ($h!=null) and (($bot==null) or ($h>$bot)) )
+    ' >/dev/null 2>&1; then echo yes; else echo no; fi
+}
+
+# REVIEWS-PENDING — my in-review issues in scope whose MR has actionable feedback → [{number,title,pr}].
+cmd_reviews_pending() {
+  local scope="${1:?scope label required}" me out='[]' pid issues num title iid
+  me="$(cmd_whoami)"
+  # Without my own username I can't tell my replies from a human's (self-limiting breaks) — report nothing
+  # pending rather than spuriously flag; the next iteration retries once glab auth is back.
+  [[ -n "$me" ]] || { echo "[]"; return 0; }
+  pid="$(_project_id 2>/dev/null || true)"; [[ -n "$pid" ]] || { echo "[]"; return 0; }
+  issues="$(_glab issue list --label "$scope" --label in-review --assignee=@me --per-page 200 --output json 2>/dev/null | jq -c '[.[] | {iid, title}]' 2>/dev/null || echo '[]')"
+  while IFS=$'\t' read -r num title; do
+    [[ -n "$num" ]] || continue
+    iid="$(_mr_for "$num")"; [[ -n "$iid" ]] || continue
+    [[ "$(_mr_actionable "$pid" "$iid" "$me")" == "yes" ]] || continue
+    out="$(jq -nc --argjson a "$out" --argjson n "$num" --arg t "$title" --argjson p "$iid" '$a + [{number:$n,title:$t,pr:$p}]')"
+  done < <(printf '%s' "$issues" | jq -r '.[] | "\(.iid)\t\(.title)"')
+  printf '%s\n' "$out"
+}
+
+# REVIEW-READ — actionable feedback for issue #N (same item shape as github). reply_to for a thread is
+# the discussion id; the aggregate conversation item carries reply_to:"conversation".
+cmd_review_read() {
+  local id="${1:?id required}" me pid iid g meta
+  me="$(cmd_whoami)"
+  [[ -n "$me" ]] || { echo "✋ review-read: cannot resolve glab username (is glab authed / GITLAB_HOST set?)" >&2; return 1; }
+  pid="$(_project_id 2>/dev/null || true)"; [[ -n "$pid" ]] || { echo "✋ review-read: cannot resolve project id" >&2; return 1; }
+  iid="$(_mr_for "$id")"
+  [[ -n "$iid" ]] || { echo "✋ review-read: no open MR for #$id (source branch ${BRANCH_PREFIX}/${id}-…)" >&2; return 1; }
+  g="$(_mr_norm "$pid" "$iid" 2>/dev/null || true)"
+  [[ -n "$g" ]] || { echo "✋ review-read: could not fetch discussions for MR !$iid (transient glab error?)" >&2; return 1; }
+  meta="$(_glab mr view "$iid" --output json 2>/dev/null | jq '{branch:.source_branch, base:.target_branch, url:.web_url}' 2>/dev/null || echo '{}')"
+  printf '%s' "$g" | jq --argjson pr "$iid" --arg me "$me" --argjson meta "$meta" '
+    ( ([ .commits[] ] + [ .comments[]|select(.author==$me)|.at ]) | map(select(.!=null)) | (if length>0 then max else null end) ) as $bot
+    | { pr:$pr, branch:($meta.branch//null), base:($meta.base//null), url:($meta.url//null),
+        items: (
+          [ .threads[] | select(.isResolved|not) | select(.last_author!=$me)
+            | {kind:"thread", reply_to:.reply_to, path, line, conversation:[.comments[]|{author,body}]} ]
+          + ( [ .comments[]|select(.author!=$me)|select(($bot==null) or (.at>$bot))|{author,body} ]
+              | if length>0 then [ {kind:"comment", reply_to:"conversation", conversation:.} ] else [] end )
+        ) }'
+}
+
+# REVIEW-REPLY — reply_to="conversation" → a plain MR note; else a discussion id → a reply note in that
+# discussion (POST .../discussions/<id>/notes). Quiet on success.
+cmd_review_reply() {
+  local id="${1:?id required}" ref="${2:?reply_to token required (a discussion id from review-read, or 'conversation')}" body="${3:?body required}" pid iid
+  pid="$(_project_id 2>/dev/null || true)"; [[ -n "$pid" ]] || { echo "✋ review-reply: cannot resolve project id" >&2; return 1; }
+  iid="$(_mr_for "$id")"
+  [[ -n "$iid" ]] || { echo "✋ review-reply: no open MR for #$id" >&2; return 1; }
+  if [[ "$ref" == "conversation" ]]; then
+    _glab mr note "$iid" -m "$body" >/dev/null
+  else
+    _glab_api -X POST "projects/${pid}/merge_requests/${iid}/discussions/${ref}/notes" -f "body=${body}" >/dev/null
+  fi
 }
 
 # Board projection — convenience only; the loop reads NOTHING from the board. No-op (GitLab boards are
