@@ -19,6 +19,14 @@ export TRACKER_BACKEND="${TRACKER_BACKEND:-github}"
 # NOTE: clickup hosts no code → it supports merge ONLY (can_open_pr=false). LAND_MODE=pr fails loud there.
 export LAND_MODE="${LAND_MODE:-merge}"
 
+# Review-response (PR mode only): on (default) = the loop also drains UNADDRESSED human review feedback on
+# its open PRs — a responder sub-agent reads the comments, fixes the branch, pushes, and replies inline
+# (it never resolves threads, re-requests review, or merges — you stay the gate). off = the pure human-only
+# gate: a PR sits untouched until you merge it. Ignored unless LAND_MODE=pr and the backend's caps report
+# can_respond_to_reviews=true (github/gitlab yes; clickup no). Self-limiting: once the bot replies to a
+# thread/comment, it is no longer "pending", so there is no re-processing loop.
+export REVIEW_RESPONSE="${REVIEW_RESPONSE:-on}"
+
 # Repo / owner slug for the server backends (github: owner/name; gitlab: group/project). clickup/local: unused.
 export REPO="${REPO:-owner/repo}"
 

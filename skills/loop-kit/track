@@ -11,6 +11,7 @@
 #   verbs: caps | sync-list <scope> | runlog-tail [N] | view <id> | item-state <id>
 #          reconcile-mine <scope> | branch-merged <branch> | claim <id> | release <id>
 #          close <id> | mark-review <id> <url> | log <body> | open-pr <branch> <id> | board-done <id>
+#          reviews-pending <scope> | review-read <id> | review-reply <id> <reply_to> <body>
 #   See the kit's REFERENCE.md (or the project's LOOP-KIT.md) for the contract + capability matrix.
 #
 # CONFIG: the per-repo project config (REPO, RUNLOG, LAND_MODE, …) lives OUTSIDE the kit at

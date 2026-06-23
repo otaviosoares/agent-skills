@@ -75,6 +75,7 @@ cmd_caps() {
 backend=clickup
 cross_machine_atomic_claim=true
 can_open_pr=false
+can_respond_to_reviews=false
 land_modes=merge
 EOF
 }
@@ -234,6 +235,14 @@ cmd_open_pr() {
   echo "   ClickUp supports LAND_MODE=merge only (caps: can_open_pr=false). Host code on GitHub/GitLab for PR mode." >&2
   return 1
 }
+
+# REVIEW-RESPONSE — UNSUPPORTED on ClickUp (it hosts no code / PRs; caps: can_respond_to_reviews=false).
+# reviews-pending returns an empty set so the runbook's REVIEW-RESPONSE phase is a clean no-op (it never
+# reaches read/reply); read/reply fail loud if ever called directly. ClickUp is LAND_MODE=merge only, so
+# the phase is also gated off by LAND_MODE — this is belt-and-suspenders.
+cmd_reviews_pending() { echo "[]"; }
+cmd_review_read()  { echo "✋ review-read: the clickup backend has no code host / PRs (caps: can_respond_to_reviews=false)." >&2; return 1; }
+cmd_review_reply() { echo "✋ review-reply: the clickup backend has no code host / PRs (caps: can_respond_to_reviews=false)." >&2; return 1; }
 
 # Board projection — no-op. ClickUp board views are status/tag-driven, so the close (status change) +
 # tag edits already move the card.

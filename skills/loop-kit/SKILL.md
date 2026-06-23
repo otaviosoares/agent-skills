@@ -296,7 +296,9 @@ is a per-project workflow call — keep that policy in your own repo's docs, not
 **Standing-loop hazards (the wave model masked these).**
 - **Merge-debt has no backpressure.** In `pr` mode issues stay OPEN until you merge, and a standing label
   never reaches `COMPLETE` — so nothing bounds the pile of un-merged agent PRs. Rule: **don't refill the
-  queue while > N issues sit in-review.**
+  queue while > N issues sit in-review.** (Review-response — `REVIEW_RESPONSE=on`, default — closes the
+  *feedback* half of this: the loop now reads your PR comments, fixes the branch, and replies inline. It
+  still never merges — you remain the merge gate — so the don't-refill rule stands.)
 - **Cost shape.** The driver defaults to `MODEL=opus EFFORT=high` (tuned for unattended wave work). For a
   stream of small edits set a cheaper profile — `MODEL=sonnet EFFORT=medium ./plans/run-loop.sh` — and
   reserve opus/high for a deliberate batch.

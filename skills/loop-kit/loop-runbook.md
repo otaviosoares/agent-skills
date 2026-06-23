@@ -64,6 +64,7 @@ Sections this skeleton applies: `## TARGET`, `## KEYSTONES` (in `$LOOP_SCOPE`); 
 ```
 ./plans/run-loop.sh                                       # defaults to this skeleton + LAND_MODE from loop.config.sh
 LAND_MODE=pr ./plans/run-loop.sh                          # open PRs instead of merging to the base branch
+REVIEW_RESPONSE=off LAND_MODE=pr ./plans/run-loop.sh      # PR mode, but never auto-address review feedback (pure human gate)
 TRACKER_BACKEND=gitlab ./plans/run-loop.sh               # different tracker backend
 ```
 `run-loop.sh` locates the installed loop-kit skill, points RUNBOOK at this skeleton, and spawns a
@@ -75,7 +76,8 @@ verbs through `"${LOOP_KIT_DIR:?run via ./plans/run-loop.sh, or export LOOP_KIT_
 and `TRACKER_BACKEND` (in `plans/loop.config.sh`) picks the adapter. Verb list + lock contract:
 the kit's REFERENCE.md. Verbs used below: `sync-list`, `runlog-tail`, `view`, `item-state`,
 `reconcile-mine`, `branch-merged`, `claim`→`won|lost`, `claim-owner`, `whoami`, `release`, `close`,
-`mark-review`, `log`, `open-pr`, `board-done`.
+`mark-review`, `log`, `open-pr`, `board-done`, and (PR mode) `reviews-pending`, `review-read`,
+`review-reply`.
 
 **Precondition (multi-runner):** each runner's tracker CLI is authed as a **distinct user** — the
 *assignee* is the lock that tells runners apart. One shared account → run **single-runner**. (Backend
@@ -106,7 +108,8 @@ orchestrator session too, after one iteration.**
 ```
 ORCHESTRATOR (one fresh driver-spawned session per iteration — thin, short-lived, STATELESS)
   re-derive state from the tracker (+ read run-log resume trail) → RECONCILE any dangling claim
-    → PICK + CLAIM one issue → BUILDER sub-agent (fresh ctx) → REVIEWER sub-agent (fresh, independent)
+    → [PR mode] REVIEW-RESPONSE: an in-review PR with human feedback? → RESPONDER sub-agent → reply + STOP
+    → else PICK + CLAIM one issue → BUILDER sub-agent (fresh ctx) → REVIEWER sub-agent (fresh, independent)
     → if P0/P1: FIXER sub-agent → re-review → LAND → CLOSE/mark-review → run-log → print sentinel + STOP
 ```
 
@@ -173,6 +176,29 @@ Two rules make this work:
    - **Already merged** → just finish the stranded tail: **CLOSE** (7) + **LOG** (8, mark `reconciled
      after interrupt`). That **is** this iteration's work → stop, emit `CONTINUE`; **don't also PICK**.
    - **Not merged** → resume at **BUILD/REVIEW/LAND** (do **not** re-CLAIM — you already own it).
+1c. **REVIEW-RESPONSE (PR mode only — drain human feedback BEFORE opening new work).**
+   **Run this only when** `LAND_MODE=pr`, the backend's `"$LOOP_KIT_DIR"/track caps` reports
+   `can_respond_to_reviews=true`, **and** `REVIEW_RESPONSE` is not `off` (default on; set
+   `REVIEW_RESPONSE=off` to keep the pure human-only gate). Otherwise **skip straight to PICK**.
+   Draining feedback on an already-open PR takes **priority over PICK** — it moves work toward merge and
+   bounds the in-review pile — so it runs first. List your in-review items in scope whose PR has
+   **actionable** feedback: `"$LOOP_KIT_DIR"/track reviews-pending "$WAVE"` → `[{number,title,pr}]`
+   (a PR is actionable iff it has an unresolved review thread whose **last comment is a human's**, or a
+   PR comment/review newer than your last push — **self-limiting**: once you reply, that thread/PR drops
+   out, so there is no re-processing loop). **Empty list → fall through to PICK.** Otherwise take the
+   **first** issue `#N` — it is already yours (assignee unchanged, still `in-review`): **do NOT re-claim
+   and do NOT change its labels** (it stays OPEN + `in-review` throughout, so PICK still skips it and
+   dependents still WAIT).
+   - Spawn a fresh **review-responder sub-agent** for `#N` (brief below). It reads the feedback, fixes
+     the branch, pushes, and replies inline to every item.
+   - **LOG** (8): `"$LOOP_KIT_DIR"/track log "iter K — responded #N (<sha>) · <m> item(s) answered ·
+     awaiting re-review · remaining: …"`.
+   - This **is** this iteration's work → emit `CONTINUE` and **STOP**; **do not also PICK**.
+   If the responder is interrupted mid-flight, no state is corrupted: items it already answered have your
+   reply as their last comment, so they drop out of `reviews-pending` and the next run addresses only
+   what's left. (Multi-runner note: `reviews-pending` keys on the **assignee**, so each runner drains its
+   own PRs. Under a SHARED login — `CLAIM_STRATEGY=note` — two agents could both pick one PR; the work is
+   idempotent + self-limiting, but run the responder single-runner if that double-effort matters.)
 2. **PICK** — choose one OPEN in-scope issue that is **all of**: unassigned · not in-progress · not
    in-review · not gated · every dep in its **`Dependencies` section closed** (`track view N` for the
    body; test each with `"$LOOP_KIT_DIR"/track item-state <depId>` = `closed`). **Skip** any whose
@@ -234,6 +260,24 @@ Two rules make this work:
 > On `<REPO>` branch `<branch>` (issue #N), fix these findings: `<findings>`. Add a **red-without-fix
 > regression test** per finding; keep changes minimal; re-run CI green.
 > **Return ONLY** `{fixedSha, testsAdded:[], note}`.
+
+### Review-responder sub-agent brief (PR mode — only when `reviews-pending` flags #N)
+> A human left review feedback on the PR for issue **#N** of `<REPO>`. Address it to *merge-ready, still
+> NOT merged*. Read this runbook (`$RUNBOOK`) + the repo recipes (`$LOOP_RECIPES`) for the rules. Steps:
+> (1) `"$LOOP_KIT_DIR"/track review-read N` → `{pr, branch, base, url, items[]}`. Each **item** is either
+> a `kind:"thread"` (an inline review thread: `path`, `line`, the `conversation`, and a `reply_to` token)
+> or a `kind:"comment"` (PR-conversation feedback, `reply_to:"conversation"`). (2) Check out `branch` and
+> rebase on `origin/<base>` if it is behind; resolve conflicts per `## CONTENTION` in `$LOOP_RECIPES`.
+> (3) For **each item**: make the **minimal** change it asks for — add a **red-without-fix regression
+> test** when it is a bug fix — **or**, if it is a question or you disagree, prepare a short rationale
+> instead. Apply `## BUILD-CONSTRAINTS` + `## CONTENTION` from `$LOOP_RECIPES` verbatim, exactly as a
+> builder would (don't touch frozen/shared shapes out-of-band). (4) Build + typecheck + test until CI is
+> green; **push the branch**. (5) Reply to **every** item you read —
+> `"$LOOP_KIT_DIR"/track review-reply N <reply_to> "<what you changed + the new sha, or your rationale>"`
+> — using each item's own `reply_to`. Replying is what clears an item from `reviews-pending`, so a missed
+> reply will be re-surfaced next iteration. **Do NOT** resolve threads, re-request review, or merge — the
+> human stays the gate. **Return ONLY**
+> `{issue, branch, pushedSha, answered:[<reply_to>…], ci:"green"|"red", note}`.
 
 ---
 

@@ -9,8 +9,9 @@ config resolution, and the producer. Backend-neutral — no project specifics he
 DRIVER (loop-drive.sh)  — stateless; spawns a fresh headless `claude -p` per iteration, reads a
                           LOOP_STATUS sentinel, decides fire-next / sleep / stop.
   └─ ORCHESTRATOR (one fresh session per iteration — thin, short-lived)
-       re-derive state from the tracker → RECONCILE any dangling claim → PICK + CLAIM one issue
-       → BUILDER sub-agent (fresh ctx) → REVIEWER sub-agent (fresh, independent) → [FIXER if P0/P1]
+       re-derive state from the tracker → RECONCILE any dangling claim
+       → [PR mode] REVIEW-RESPONSE: an in-review PR with human feedback? → RESPONDER sub-agent → reply + STOP
+       → else PICK + CLAIM one issue → BUILDER sub-agent (fresh ctx) → REVIEWER sub-agent → [FIXER if P0/P1]
        → LAND (merge to base branch, or open a PR) → CLOSE/mark-review → run-log → print sentinel + STOP
 ```
 
@@ -79,7 +80,7 @@ Each of `TRACKER_CONFIG` / `LOOP_RECIPES` / `LOOP_SCOPE` honors a pre-set env va
 defaults them).
 
 `loop.config.sh` keys: `TRACKER_BACKEND` (github|gitlab|clickup — `local` is a planned backend, no
-adapter shipped yet), `LAND_MODE` (merge|pr), `REPO`,
+adapter shipped yet), `LAND_MODE` (merge|pr), `REVIEW_RESPONSE` (on|off — PR-mode review-response, default on), `REPO`,
 `RUNLOG`, `WAVE` (default scope label), `BRANCH_PREFIX`, `BASE_BRANCH` (empty = auto-detect the repo's
 default branch; set to pin a non-default integration branch), `CLAIM_STRATEGY` (github+gitlab: assignee|note;
 github note REQUIRES a per-agent `RUNNER_ID` — see the lock contract below),
@@ -108,6 +109,9 @@ The runbook calls these via `"$LOOP_KIT_DIR"/track <verb>`; `TRACKER_BACKEND` se
 | `mark-review <id> <url>` | remove in-progress, add in-review, keep assignee, note URL (PR mode) | state |
 | `log <body>` | append one run-log entry (arg or stdin) | state |
 | `open-pr <branch> <id>` | push branch + open PR/MR, print URL (PR mode) | — |
+| `reviews-pending <scope>` | PR mode: my in-review items whose PR has actionable feedback → `[{number,title,pr}]` | state |
+| `review-read <id>` | PR mode: actionable feedback for #N → `{pr,branch,base,url,items:[{kind,reply_to,path,line,conversation}]}` | state |
+| `review-reply <id> <reply_to> <body>` | PR mode: post an inline thread reply (`reply_to`=token) or a conversation reply (`reply_to`=`conversation`) | — |
 | `board-done <id>` | optional board projection; no-op-able | convenience |
 
 ## The lock contract (every backend satisfies the *guarantee*, not the mechanism)
@@ -168,6 +172,10 @@ ClickUp is a tracker, not a code host: `branch-merged` is git-only and `open-pr`
 clickup backend supports **`LAND_MODE=merge` only** (the git push to the base branch still happens
 against whatever code host — GitHub/GitLab/etc — the repo's `origin` points at).
 
+**Review-response (`can_respond_to_reviews`)** tracks open-PR capability: **github + gitlab = yes**
+(`reviews-pending`/`review-read`/`review-reply` over PR review threads / MR discussions), **clickup =
+no** (no PRs → `reviews-pending` returns empty, read/reply fail loud). See the LAND_MODE § for the flow.
+
 ## LAND_MODE
 
 - **`merge` (default):** after rebase/regenerate/CI-green, the agent **merges to the base branch**
@@ -176,6 +184,31 @@ against whatever code host — GitHub/GitLab/etc — the repo's `origin` points 
 - **`pr`:** after CI-green, `track open-pr <branch> <id>` opens a PR/MR and prints the URL, then
   `track mark-review <id> <url>` — **do NOT close**. The issue stays open + assigned + in-review, so
   dependents WAIT until a human merges and closes. Trades full autonomy for a human merge gate.
+
+### Review-response (PR mode; `REVIEW_RESPONSE`, default `on`)
+
+By itself, PR mode parks an issue in-review and never looks at it again — your review comments sit
+untouched until you merge. With `REVIEW_RESPONSE=on` (the default, gated to `LAND_MODE=pr` +
+`caps.can_respond_to_reviews=true`), the orchestrator adds a **REVIEW-RESPONSE phase** that runs
+**before PICK** (draining feedback on an open PR beats opening a new one — it reduces in-review debt):
+
+1. `track reviews-pending <scope>` → my in-review items whose PR has **actionable** feedback.
+2. A fresh **review-responder sub-agent** reads `track review-read <id>`, fixes the branch, pushes, and
+   `track review-reply <id> <reply_to> <body>` answers **every** item inline. It does **not** resolve
+   threads, re-request review, or merge — the human stays the gate. The issue stays OPEN + in-review the
+   whole time (no label churn), so PICK still skips it and dependents still WAIT.
+
+**Actionability is self-limiting — no high-water marker, no re-processing loop:** a review *thread* is
+actionable iff its **last comment is a human's** (once the bot replies, the bot's comment is last → the
+thread drops out); *conversation* feedback (a PR comment, or a review body that isn't an inline thread)
+is actionable iff it is **newer than the bot's last commit/comment** on the PR (the bot's push + reply
+advance that high-water). An interrupted responder is safe: already-answered items drop out, so a re-run
+addresses only the remainder. `reviews-pending` keys on the **assignee**, so each runner drains its own
+PRs; under a shared login (`CLAIM_STRATEGY=note`) two agents could both pick one PR — harmless
+(idempotent + self-limiting), but run the responder single-runner if the double-effort matters.
+**Backends:** github + gitlab (`can_respond_to_reviews=true`); clickup hosts no PRs so the phase is a
+no-op there (`reviews-pending` returns empty; it is also gated off by clickup's merge-only `LAND_MODE`).
+Set `REVIEW_RESPONSE=off` to keep the pure human-only gate.
 
 ## Producer (`materialize-*`) — standing up a scope's issues
 
