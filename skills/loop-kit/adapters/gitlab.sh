@@ -264,9 +264,13 @@ cmd_open_pr() {
   if ! git push -u origin "$branch" >/dev/null 2>&1; then
     echo "✋ open-pr: failed to push '$branch' to origin" >&2; return 1
   fi
-  _glab mr create --source-branch "$branch" --target-branch "$base" --yes \
+  # `Closes #${id}` lets GitLab auto-close the issue when this MR merges to the DEFAULT branch, so a
+  # human merge IS the close (the PR-mode dep-gate keys on closed; nothing in the loop closes an
+  # in-review issue). Fires only when target==default branch; the --fill fallback carries no keyword,
+  # so a degraded create lands without auto-close and needs a manual `track close`.
+  _glab mr create --source-branch "$branch" --target-branch main --yes \
     --title "#${id} — ${branch}" \
-    --description "Automated build for #${id}. CI green; awaiting human review/merge." >/dev/null 2>&1 \
+    --description "Automated build for #${id}. Closes #${id}. CI green; awaiting human review/merge." >/dev/null 2>&1 \
     || _glab mr create --source-branch "$branch" --target-branch "$base" --fill --yes >/dev/null 2>&1 || true
   url="$(_glab mr view "$branch" --output json 2>/dev/null | jq -r '.web_url // empty' 2>/dev/null || true)"
   if [[ -z "$url" ]]; then echo "✋ open-pr: MR did not open for '$branch'" >&2; return 1; fi

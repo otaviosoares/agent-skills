@@ -269,9 +269,13 @@ cmd_open_pr() {
   if ! git push -u origin "$branch" >/dev/null 2>&1; then
     echo "✋ open-pr: failed to push '$branch' to origin" >&2; return 1
   fi
-  _gh pr create --head "$branch" --base "$base" \
+  # `Closes #${id}` lets GitHub auto-close the issue when this PR merges to the DEFAULT branch, so a
+  # human merge IS the close (the PR-mode dep-gate keys on closed; nothing in the loop closes an
+  # in-review issue). Fires only when base==default branch; the --fill fallback carries no keyword,
+  # so a degraded create lands without auto-close and needs a manual `track close`.
+  _gh pr create --head "$branch" --base main \
     --title "#${id} — ${branch}" \
-    --body "Automated build for #${id}. CI green; awaiting human review/merge." >/dev/null 2>&1 \
+    --body "Automated build for #${id}. Closes #${id}. CI green; awaiting human review/merge." >/dev/null 2>&1 \
     || _gh pr create --head "$branch" --base "$base" --fill >/dev/null 2>&1 || true
   url="$(_gh pr view "$branch" --json url --jq .url 2>/dev/null || true)"
   if [[ -z "$url" ]]; then echo "✋ open-pr: PR did not open for '$branch'" >&2; return 1; fi
