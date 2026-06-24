@@ -202,11 +202,20 @@ done
 # ── live feed: one stream-json event → one readable line (sub-agent work indented) ─────────
 JQ_FILTER='
   def trunc($s): if ($s|length)>140 then $s[0:140]+"…" else $s end;
+  def toolview:
+    .name as $n | (.input // {}) as $in
+    | if   $n=="Bash" then "$ " + trunc($in.command // ($in|tojson))
+      elif ($n=="Read" or $n=="Edit" or $n=="Write" or $n=="NotebookEdit")
+           then "\($n) " + ($in.file_path // $in.notebook_path // ($in|tojson))
+      elif $n=="Grep" then "Grep /\($in.pattern // "")/" + (if ($in.path // "")!="" then " in \($in.path)" else "" end)
+      elif $n=="Glob" then "Glob \($in.pattern // "")"
+      elif ($n=="Task" or $n=="Agent") then "\($n) ▸ " + ($in.description // $in.subagent_type // trunc($in|tojson))
+      else "\($n) " + trunc($in|tojson) end;
   (.parent_tool_use_id // null) as $sub | (if $sub then "    ⤷ " else "" end) as $p
   | if   .type=="system" and .subtype=="init" then "▸ init · \(.model) · perm=\(.permissionMode)\n"
     elif .type=="assistant" then ([ .message.content[]?
            | if   .type=="text" and ((.text|gsub("[[:space:]]";"")|length)>0) then "\($p)💬 \(.text)"
-             elif .type=="tool_use" then "\($p)🔧 \(.name) " + trunc(.input|tojson)
+             elif .type=="tool_use" then "\($p)🔧 " + toolview
              else empty end ] | map(.+"\n") | join(""))
     elif .type=="user" then ([ .message.content[]?
            | if .type=="tool_result" then "\($p)   ↳ " + (if (.is_error//false) then "⚠ error" else "ok" end)
