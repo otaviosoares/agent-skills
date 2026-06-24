@@ -1,28 +1,10 @@
 <!--
-  loop-runbook.md — the CANONICAL loop-kit runbook SKELETON. This file lives IN THE SKILL and is
-  symlinked into every onboarded repo (like track / adapters / loop-drive.sh), so a skeleton change
-  propagates to every repo automatically — no per-repo copy to go stale. `run-loop.sh` defaults
-  RUNBOOK to this file.
-
-  It is backend-neutral and project-neutral. The per-repo JUDGMENT (contention recipe, land/lockfile
-  recipe, CI-truth carve-out, review lenses, build constraints) is NOT here — it lives in the REPO's
-  `plans/loop.recipes.md`, which the driver exports as $LOOP_RECIPES. The PER-WAVE scope (the wave's
-  target/keystones) lives in the REPO's `plans/loop.scope.md`, exported as $LOOP_SCOPE.
-  Wherever a step needs that judgment, the skeleton carries a **RECIPE →** marker naming the labeled
-  section to apply verbatim. The kit NEVER auto-fills those sections (fail loud — a wrong value
-  corrupts shared code or bypasses a supply-chain gate while the loop runs UNATTENDED).
-
-  Environment the driver exports into each session (loop-drive.sh):
-    LOOP_KIT_DIR    — this kit dir (where track + adapters/ live). Verb calls use "$LOOP_KIT_DIR"/track.
-    TRACKER_CONFIG  — the repo's plans/loop.config.sh (track sources it for REPO/RUNLOG/backend/…).
-    LOOP_RECIPES    — the repo's plans/loop.recipes.md (the ~stable per-repo judgment this skeleton applies).
-    LOOP_SCOPE      — the repo's plans/loop.scope.md (the per-wave TARGET/KEYSTONES this skeleton applies).
-    WAVE            — the scope label (from loop.config.sh). The skeleton's verb calls pass "$WAVE".
-    BRANCH_PREFIX   — the branch/worktree prefix (from loop.config.sh). Branches are "$BRANCH_PREFIX/N-<slug>".
-  Running interactively without the driver? From the repo root, first:
-    export LOOP_KIT_DIR="$(./plans/run-loop.sh --print-kit-dir)" TRACKER_CONFIG="$PWD/plans/loop.config.sh" \
-           LOOP_RECIPES="$PWD/plans/loop.recipes.md" LOOP_SCOPE="$PWD/plans/loop.scope.md"; set -a; . "$TRACKER_CONFIG"; set +a
-  (the last clause exports WAVE/BRANCH_PREFIX for the verb calls below).
+  loop-runbook.md — the CANONICAL loop-kit runbook SKELETON: a backend/project-neutral state machine,
+  symlinked into every onboarded repo, that applies each repo's per-repo judgment (plans/loop.recipes.md,
+  $LOOP_RECIPES) and per-wave scope (plans/loop.scope.md, $LOOP_SCOPE) at the `RECIPE → ## NAME` markers
+  below — the kit NEVER auto-fills a section (fail loud → LOOP_STATUS=BLOCKED). How it's wired, the env
+  the driver exports into each session, and how to run a step interactively: see SKILL.md, REFERENCE.md,
+  and the loop-drive.sh header.
 -->
 # Build Loop — context-bounded, multi-runner, tracker-driven
 
@@ -56,9 +38,6 @@ also names the file. The contract, applied at every marker:
 > the ## NAME section is filled"`, where `<file>` is `$LOOP_SCOPE` or `$LOOP_RECIPES`). Never guess it —
 > a wrong scope/contention/land/CI-truth/lens value corrupts shared code or bypasses a supply-chain gate
 > while the loop runs unattended.
-
-Sections this skeleton applies: `## TARGET`, `## KEYSTONES` (in `$LOOP_SCOPE`); `## CONTENTION`,
-`## BUILD-CONSTRAINTS`, `## REVIEW-LENSES`, `## LAND`, `## CI-TRUTH` (in `$LOOP_RECIPES`).
 
 ## Run it (every runner runs this — self-paced, context-bounded)
 ```

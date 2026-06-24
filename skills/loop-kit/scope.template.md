@@ -1,20 +1,9 @@
 <!--
-  scope.template.md — `init` copies this in as the repo's plans/loop.scope.md. It holds the PER-WAVE
-  scope (## TARGET, ## KEYSTONES) the loop-kit skeleton (loop-runbook.md, which lives IN THE SKILL and
-  is symlinked into the repo) applies BY NAME. Each `## SECTION` below answers a `RECIPE → ## NAME`
-  marker in the skeleton; at that marker the skeleton opens this file, finds the named section, and
-  applies it VERBATIM. The driver exports this file as $LOOP_SCOPE.
-
-  THESE ARE REWRITTEN EVERY WAVE — they are THIS wave's scope. Advancing a wave = bump WAVE in
-  plans/loop.config.sh + edit ## TARGET / ## KEYSTONES here. (The ~stable per-repo recipes — CONTENTION,
-  BUILD-CONSTRAINTS, REVIEW-LENSES, LAND, CI-TRUTH — live in the sibling plans/loop.recipes.md.)
-
-  THE KIT NEVER AUTO-FILLS THESE — fail loud. Resolve every `<<FILL: … >>` token by hand before a real
-  run; an unresolved section makes the skeleton STOP with `LOOP_STATUS=BLOCKED` (it never guesses).
-  Search for `<<FILL` to find them.
-
-  The scope LABEL itself is a VALUE in plans/loop.config.sh (WAVE), NOT here — this file answers "what is
-  in scope and how the frontier was chosen", loop.config.sh answers "which label".
+  scope.template.md — `init` copies this in as the repo's plans/loop.scope.md: the PER-WAVE scope
+  (## TARGET, ## KEYSTONES) the loop-kit skeleton applies BY NAME. REWRITTEN EVERY WAVE — advancing a
+  wave = bump WAVE in plans/loop.config.sh + rewrite these two sections. Fill every `<<FILL: …>>` by hand
+  before a real run; the kit never auto-fills, and an unresolved section makes the loop STOP with
+  LOOP_STATUS=BLOCKED. The ~stable per-repo recipes live in the sibling plans/loop.recipes.md.
 -->
 # <<FILL: repo name>> — loop scope (per-wave)
 
