@@ -36,7 +36,7 @@ session re-derives it). No per-loop script.
 **Tracker interface (backend-agnostic).** This runbook NEVER calls `gh`/`glab` directly — it calls
 verbs through `"${LOOP_KIT_DIR:?run via ./plans/run-loop.sh, or export LOOP_KIT_DIR}"/track <verb>`,
 and `TRACKER_BACKEND` (in `plans/loop.config.sh`) picks the adapter. Verb list + lock contract:
-the kit's REFERENCE.md. Verbs used below: `sync-list`, `runlog-tail`, `view`, `item-state`,
+the kit's REFERENCE.md. Verbs used below: `sync-list`, `runlog-tail`, `view`, `item-state`, `deps`,
 `reconcile-mine`, `branch-merged`, `claim`→`won|lost`, `claim-owner`, `whoami`, `release`, `close`,
 `mark-review`, `log`, `open-pr`, `reviews-pending`, `review-read`, `review-reply`.
 
@@ -158,8 +158,9 @@ Two rules make this work:
    own PRs. Under a SHARED login — `CLAIM_STRATEGY=note` — two agents could both pick one PR; the work is
    idempotent + self-limiting, but run the responder single-runner if that double-effort matters.)
 2. **PICK** — choose one OPEN in-scope issue that is **all of**: unassigned · not in-progress · not
-   in-review · not gated · every dep in its **`Dependencies` section closed** (`track view N` for the
-   body; test each with `"$LOOP_KIT_DIR"/track item-state <depId>` = `closed`). **Skip** any whose
+   in-review · not gated · **unblocked** — every id from `"$LOOP_KIT_DIR"/track deps N` is `closed`
+   (test each with `"$LOOP_KIT_DIR"/track item-state <depId>` = `closed`; empty `deps` output = no
+   blockers). `deps` resolves native links first, else a `## Blocked by` body section. **Skip** any whose
    merge hotspot (per the repo's CLAUDE.md) overlaps an issue currently in-progress you don't own.
    Among equals **don't deterministically pick what another runner would** — the tie-break
    in step 3 resolves rare races.

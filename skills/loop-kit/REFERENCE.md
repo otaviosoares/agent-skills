@@ -89,6 +89,7 @@ The runbook calls these via `"$LOOP_KIT_DIR"/track <verb>`; `TRACKER_BACKEND` se
 | `runlog-tail [N]` | last N run-log entries (the resume trail) | state |
 | `view <id>` | one item's body + labels + state + assignees | state |
 | `item-state <id>` | `open\|closed` (the dep gate) | state |
+| `deps <id>` | ids blocking `<id>`, one per line (empty = unblocked): native links first (GitHub issue dependencies / GitLab `is_blocked_by`), else a `## Blocked by` body section. PICK treats `<id>` as unblocked iff every id is `closed` | state |
 | `reconcile-mine <scope>` | my in-progress items (the dangling-claim signal) | state |
 | `branch-merged <branch>` | `yes\|no` — is this branch already on the base branch (`$BASE_BRANCH`) | state |
 | `claim <id>` | **atomic claim → `won\|lost`** — the only lock-critical verb | **lock** |
@@ -145,7 +146,7 @@ Shipped backends: **github**, **gitlab**. `local` is designed (above) but has no
 
 ```
 backend          atomic-lock            cross-machine multi-runner    open-PR   deps
-github (gh)      yes (login-sort CAS)   N logins, or note: N/login     yes       issue-body dep list / title convention
+github (gh)      yes (login-sort CAS)   N logins, or note: N/login     yes       native issue dependencies, else ## Blocked by body
 gitlab (glab)    yes (additive-+ CAS)   yes (N distinct users)        yes (MR)  native blocked_by links (stronger)
 local (planned)  mkdir/O_EXCL or        same-host-N, or cross-machine no        native deps:[id] frontmatter
                  git-push rejection     ONLY via a git remote (=server)

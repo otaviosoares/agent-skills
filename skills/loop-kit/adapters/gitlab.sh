@@ -92,6 +92,49 @@ cmd_item_state() {
   esac
 }
 
+# DEPS — the ids of issues blocking N, one per line (empty = unblocked). Mirrors github.sh verb-for-verb;
+# PICK gates on state (N unblocked iff every id here is `closed`). Two sources, native first:
+#   1. NATIVE issue links — GitLab's first-class relationship (stronger than github's body list). The
+#      links endpoint returns every linked issue with a `link_type`; only `is_blocked_by` are blockers
+#      (`relates_to` is non-directional; `blocks` means THIS issue blocks the other — the reverse edge).
+#   2. FALLBACK when there are no native links: parse a `## Blocked by` section from the body/description
+#      (what /to-tickets writes without native links). Native present → body is ignored.
+_deps_native_filter() { printf '%s' '.[] | select(.link_type=="is_blocked_by") | .iid'; }   # links → blocker iids (testable)
+
+cmd_deps() {
+  local id="${1:?id required}" pid native body
+  # pid guarded: without the links endpoint (unreachable project id / transient error) fall through to
+  # the body parse rather than abort the dispatcher under set -e mid-iteration.
+  pid="$(_project_id 2>/dev/null || true)"
+  if [[ -n "$pid" ]]; then
+    native="$(_glab_api "projects/${pid}/issues/${id}/links" 2>/dev/null | jq -r "$(_deps_native_filter)" 2>/dev/null || true)"
+    if [[ -n "${native//[[:space:]]/}" ]]; then printf '%s\n' "$native"; return 0; fi
+  fi
+  body="$(_glab issue view "$id" --output json 2>/dev/null | jq -r '.description // ""' 2>/dev/null || true)"
+  printf '%s' "$body" | _deps_body
+}
+
+# Shared `## Blocked by` body parser — IDENTICAL to github.sh's (same reason _lc is duplicated: each
+# adapter is self-contained). Read a body on stdin, print each `#K` referenced under a `## Blocked by`
+# heading, deduped, first-seen order; the section ends at the next `#`-heading. Case-insensitive heading,
+tolerant of a trailing `:`.
+_deps_body() {
+  awk '
+    /^#+[[:space:]]/ {
+      inblk = (tolower($0) ~ /^#+[[:space:]]+blocked[[:space:]]+by[[:space:]]*:?[[:space:]]*$/)
+      next
+    }
+    inblk {
+      s = $0
+      while (match(s, /#[0-9]+/)) {
+        n = substr(s, RSTART + 1, RLENGTH - 1)
+        if (!(n in seen)) { seen[n] = 1; print n }
+        s = substr(s, RSTART + RLENGTH)
+      }
+    }
+  '
+}
+
 # RECONCILE — my in-progress items in scope (the dangling-claim signal). Repeated --label = AND
 # (scope AND in-progress); --assignee=@me. Both claim strategies leave the WINNER assigned, so this
 # is uniform across strategies. Default state is opened, which is what we want.
