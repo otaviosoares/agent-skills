@@ -2,8 +2,8 @@
 # adapters/github.sh — the GitHub (gh CLI) tracker adapter. REFERENCE backend.
 #
 # Defines cmd_<verb> functions invoked by ./track. Each is a faithful wrapper of the exact gh
-# command wave-loop.md used to inline (file:line cited per verb). Project values (REPO, RUNLOG,
-# LAND_MODE, BRANCH_PREFIX) come from tracker.config.sh; ./track sources both before dispatch.
+# command the original runbook used to inline. Project values (REPO, RUNLOG,
+# BRANCH_PREFIX) come from tracker.config.sh; ./track sources both before dispatch.
 #
 # The lock CONTRACT this adapter satisfies (see LOOP-KIT.md): of N racing runners, exactly one
 # wins, the loser can detect it and yield, the lock is owner-releasable, and the claimant id is
@@ -48,35 +48,34 @@ backend=github
 cross_machine_atomic_claim=true
 can_open_pr=true
 can_respond_to_reviews=true
-land_modes=merge,pr
 EOF
 }
 
-# SYNC — open work-items in scope. (wave-loop.md:82) --limit 300 fixes gh's silent default of 30.
+# SYNC — open work-items in scope. --limit 300 fixes gh's silent default of 30.
 cmd_sync_list() {
   local scope="${1:?scope label required, e.g. wave:4}"
   _gh issue list --label "$scope" --state open --limit 300 \
     --json number,title,labels,assignees,state
 }
 
-# Run-log resume trail — last N entries. (wave-loop.md:84)
+# Run-log resume trail — last N entries.
 cmd_runlog_tail() {
   local n="${1:-2}"
   _gh issue view "$RUNLOG" --json comments --jq ".comments[-${n}:][].body"
 }
 
-# One item, full. (wave-loop.md:95,107) — used for the brief, dep parse, contention skip.
+# One item, full. — used for the brief, dep parse, contention skip.
 cmd_view() {
   _gh issue view "${1:?id required}" \
     --json number,title,body,labels,assignees,state,milestone
 }
 
-# Item terminal state as a lowercase token (open|closed) — the dep gate. (wave-loop.md:95,133)
+# Item terminal state as a lowercase token (open|closed) — the dep gate.
 cmd_item_state() {
   _gh issue view "${1:?id required}" --json state --jq '.state' | tr '[:upper:]' '[:lower:]'
 }
 
-# RECONCILE — my in-progress items in scope (the dangling-claim signal). (wave-loop.md:91)
+# RECONCILE — my in-progress items in scope (the dangling-claim signal).
 cmd_reconcile_mine() {
   local scope="${1:?scope label required}"
   _gh issue list --label "$scope" --label in-progress --state open \
@@ -88,18 +87,18 @@ cmd_reconcile_mine() {
 cmd_branch_merged() {
   local branch="${1:?branch required}" base="${BASE_BRANCH:-main}"
   git fetch origin "$base" -q 2>/dev/null || true   # avoid a stale origin/$base → false-negative → needless rebuild
-  # merge-commit / rebase landings (what the loop does in merge mode): the branch tip is an ANCESTOR of the base branch.
+  # merge-commit / rebase landings: the branch tip is an ANCESTOR of the base branch.
   if git branch -r --merged "origin/$base" 2>/dev/null | grep -q "/${branch}\$"; then
     echo yes; return 0
   fi
-  # squash landings (PR mode; branch tip is NOT an ancestor): ask the host whether its PR merged.
+  # squash landings (branch tip is NOT an ancestor): ask the host whether its PR merged.
   if [[ "$(_gh pr view "$branch" --json state --jq '.state' 2>/dev/null || true)" == "MERGED" ]]; then
     echo yes; return 0
   fi
   echo no
 }
 
-# CLAIM (atomic) → prints won|lost. (wave-loop.md:96) Dispatches on CLAIM_STRATEGY (assignee|note).
+# CLAIM (atomic) → prints won|lost. Dispatches on CLAIM_STRATEGY (assignee|note).
 cmd_claim() {
   local id="${1:?id required}" me
   me="$(gh api user --jq .login 2>/dev/null || true)"   # claimant identity; empty → treated as lost (safe)
@@ -219,7 +218,7 @@ cmd_whoami() {
   if [[ "${CLAIM_STRATEGY:-assignee}" == "note" ]]; then echo "${me}#$(_runner_disc)"; else echo "$me"; fi
 }
 
-# Release my claim (lost race / abort). (wave-loop.md:96,141)
+# Release my claim (lost race / abort).
 cmd_release() {
   local id="${1:?id required}"
   _gh issue edit "$id" --remove-assignee "@me" --remove-label in-progress >/dev/null 2>&1 || true
@@ -232,7 +231,8 @@ cmd_release() {
   fi
 }
 
-# CLOSE — terminal, merge-mode. (wave-loop.md:101)
+# CLOSE — terminal. RECONCILE's stranded-tail fallback: a merged branch whose PR was created degraded
+# (the --fill fallback carries no `Closes #N` keyword) leaves the issue open — this finishes it.
 cmd_close() {
   local id="${1:?id required}"
   # Close FIRST (the terminal op). If close fails and aborts, the issue stays OPEN, still assigned + in-progress,
@@ -242,14 +242,14 @@ cmd_close() {
   _gh issue edit "$id" --remove-label in-progress >/dev/null 2>&1 || true
 }
 
-# PR-mode handoff — keep the issue OPEN + assigned so PICK skips it and dependents WAIT for a human merge.
+# Review handoff — keep the issue OPEN + assigned so PICK skips it and dependents stay gated until a human merge.
 cmd_mark_review() {
   local id="${1:?id required}" url="${2:-}"
   _gh issue edit "$id" --remove-label in-progress --add-label in-review >/dev/null
   [[ -n "$url" ]] && _gh issue comment "$id" --body "PR opened: ${url} — awaiting human merge." >/dev/null || true
 }
 
-# LOG — append one run-log entry (arg or stdin). (wave-loop.md:102)
+# LOG — append one run-log entry (arg or stdin).
 cmd_log() {
   local body="${1:-}"
   # Read stdin only if there's no arg AND stdin is piped (not a tty → won't block waiting for EOF).
@@ -259,7 +259,7 @@ cmd_log() {
   _gh issue comment "$RUNLOG" --body "$body" >/dev/null
 }
 
-# Open a PR for the built branch (PR/MR mode), print its URL. (new — LAND_MODE=pr)
+# Open a PR for the built branch, print its URL.
 cmd_open_pr() {
   local branch="${1:?branch required}" id="${2:?id required}" base="${BASE_BRANCH:-main}" url
   # Idempotent: a prior interrupted run may already have opened the PR — return its URL, don't double-create.
@@ -423,7 +423,3 @@ cmd_review_reply() {
     return 1
   fi
 }
-
-# Board projection — convenience only; the loop reads NOTHING from the board (wave-loop.md:7).
-# No-op here: moving the card needs the project's opaque PVT_/PVTF_ IDs (do at runtime if wanted).
-cmd_board_done() { :; }

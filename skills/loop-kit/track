@@ -9,20 +9,20 @@
 #
 # USAGE:  "$LOOP_KIT_DIR"/track <verb> [args…]   (vendored: ./plans/loop-kit/track <verb> [args…])
 #   verbs: caps | sync-list <scope> | runlog-tail [N] | view <id> | item-state <id>
-#          reconcile-mine <scope> | branch-merged <branch> | claim <id> | release <id>
-#          close <id> | mark-review <id> <url> | log <body> | open-pr <branch> <id> | board-done <id>
+#          reconcile-mine <scope> | branch-merged <branch> | claim <id> | claim-owner <id> | whoami
+#          release <id> | close <id> | mark-review <id> <url> | log <body> | open-pr <branch> <id>
 #          reviews-pending <scope> | review-read <id> | review-reply <id> <reply_to> <body>
 #   See the kit's REFERENCE.md (or the project's LOOP-KIT.md) for the contract + capability matrix.
 #
-# CONFIG: the per-repo project config (REPO, RUNLOG, LAND_MODE, …) lives OUTSIDE the kit at
+# CONFIG: the per-repo project config (REPO, RUNLOG, …) lives OUTSIDE the kit at
 #   <repo>/plans/loop.config.sh — the kit ships only a sanitized tracker.config.example.sh template.
 #   The driver exports TRACKER_CONFIG to point here; any value is also env-overridable, e.g.:
-#   TRACKER_BACKEND=gitlab LAND_MODE=pr "$LOOP_KIT_DIR"/track caps
+#   TRACKER_BACKEND=gitlab "$LOOP_KIT_DIR"/track caps
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 1) project config (repo slug, run-log handle, land mode, …). env overrides win (config uses :- defaults).
+# 1) project config (repo slug, run-log handle, …). env overrides win (config uses :- defaults).
 #    The per-repo config lives OUTSIDE the kit so extracting loop-kit/ to a skill carries no project IP.
 #    Resolution order (first that exists wins):
 #      $TRACKER_CONFIG               — the driver always exports this → <repo>/plans/loop.config.sh

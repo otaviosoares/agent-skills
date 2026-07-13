@@ -9,30 +9,24 @@
 # plans/loop.config.sh and fill in real values.
 #
 # Every value uses ${VAR:-default} so an env override always wins, e.g.:
-#   TRACKER_BACKEND=gitlab LAND_MODE=pr ./plans/run-loop.sh
+#   TRACKER_BACKEND=gitlab ./plans/run-loop.sh
 
-# Which backend adapter to load: github | gitlab | clickup  (must match the kit's adapters/<backend>.sh;
+# Which backend adapter to load: github | gitlab  (must match the kit's adapters/<backend>.sh;
 # a `local` backend is planned but ships no adapter yet — selecting it fails loud).
 export TRACKER_BACKEND="${TRACKER_BACKEND:-github}"
 
-# Landing policy: merge = merge to the base branch unattended (autonomous); pr = open a PR/MR + hand off to a human.
-# NOTE: clickup hosts no code → it supports merge ONLY (can_open_pr=false). LAND_MODE=pr fails loud there.
-export LAND_MODE="${LAND_MODE:-merge}"
-
-# Review-response (PR mode only): on (default) = the loop also drains UNADDRESSED human review feedback on
+# Review-response: on (default) = the loop also drains UNADDRESSED human review feedback on
 # its open PRs — a responder sub-agent reads the comments, fixes the branch, pushes, and replies inline
 # (it never resolves threads, re-requests review, or merges — you stay the gate). off = the pure human-only
-# gate: a PR sits untouched until you merge it. Ignored unless LAND_MODE=pr and the backend's caps report
-# can_respond_to_reviews=true (github/gitlab yes; clickup no). Self-limiting: once the bot replies to a
+# gate: a PR sits untouched until you merge it. Self-limiting: once the bot replies to a
 # thread/comment, it is no longer "pending", so there is no re-processing loop.
 export REVIEW_RESPONSE="${REVIEW_RESPONSE:-on}"
 
-# Repo / owner slug for the server backends (github: owner/name; gitlab: group/project). clickup/local: unused.
+# Repo / owner slug (github: owner/name; gitlab: group/project).
 export REPO="${REPO:-owner/repo}"
 
-# The per-wave run-log handle the adapter resolves
-# (github issue number / gitlab issue iid / clickup task id / local file path).
-export RUNLOG="${RUNLOG:-<run-log issue#/iid/task-id/file>}"
+# The run-log handle the adapter resolves (github issue number / gitlab issue iid).
+export RUNLOG="${RUNLOG:-<run-log issue#/iid>}"
 
 # Default queue scope label (the runbook usually passes this explicitly; this is the fallback).
 export WAVE="${WAVE:-wave:1}"
@@ -51,7 +45,7 @@ export BASE_BRANCH="${BASE_BRANCH:-}"
 # runner a DISTINCT login. note = comment-marker CAS that lets N agents SHARE ONE login (e.g. a teammate
 # running two agents under one account) — every runner still assigns its login up front, so note and
 # assignee runners INTEROP safely on the same issue. (gitlab: note is also the Free-tier single-assignee
-# fallback.) clickup ignores this. INVARIANT: a given login is wholly one strategy — never both.
+# fallback.) INVARIANT: a given login is wholly one strategy — never both.
 export CLAIM_STRATEGY="${CLAIM_STRATEGY:-assignee}"
 
 # github note-strategy: REQUIRED, per-AGENT id appended to the login in the claim marker (claimant =
@@ -82,28 +76,3 @@ export CLAIM_STRATEGY="${CLAIM_STRATEGY:-assignee}"
 # if [[ -f "$(dirname "${BASH_SOURCE[0]}")/loop.secrets.sh" ]]; then
 #   source "$(dirname "${BASH_SOURCE[0]}")/loop.secrets.sh"
 # fi
-
-# ── ClickUp (REST API v2; TRACKER_BACKEND=clickup) ──────────────────────────────────────────────
-# ClickUp has no official CLI — the adapter curls the API with a raw `pk_…` personal token. The tracker
-# unit is a LIST (not owner/repo); scope/labels are space TAGS; open|closed is the status TYPE. ClickUp
-# is natively multi-assignee, so the default assignee-union claim is always safe (no `note` fallback
-# needed). REQUIRES each runner authed as a DISTINCT user (a distinct CLICKUP_TOKEN) for multi-runner.
-# export CLICKUP_TOKEN="${CLICKUP_TOKEN:-pk_xxx}"          # personal token (raw, in the Authorization header)
-# export CLICKUP_LIST_ID="${CLICKUP_LIST_ID:-}"           # the list whose tasks are the loop queue (the REPO analog)
-# export CLICKUP_STATUS_DONE="${CLICKUP_STATUS_DONE:-closed}"  # the done/closed status NAME `close` sets (its type must be closed/done)
-# export CLICKUP_API="${CLICKUP_API:-https://api.clickup.com/api/v2}"  # override for an enterprise/self-managed endpoint
-# PRECONDITION: create the `in-progress` and `in-review` tags in the space once (the runtime attaches
-# existing space tags). RUNLOG above = a ClickUp TASK id whose comments are the run-log.
-
-# ── GitHub Projects-v2 board (OPTIONAL; github producer only) ───────────────────────────────────
-# materialize-github.mjs places each created issue on a board and sets fields. These ids are
-# PER-PROJECT (discover with `gh project list` + `gh project field-list <n> --owner <o>`). Leave the
-# core three UNSET and the board hook is a NO-OP (issues are still created; they just aren't placed).
-# Field ids are individually optional — an unset field is skipped.
-# export GH_PROJECT="${GH_PROJECT:-}"             # project NUMBER (e.g. 1)
-# export GH_PROJECT_OWNER="${GH_PROJECT_OWNER:-}" # owner login/org
-# export GH_PROJECT_ID="${GH_PROJECT_ID:-}"       # project node id (PVT_…)
-# export GH_FIELD_WAVE="${GH_FIELD_WAVE:-}"       # number field id (PVTF_…) ← from the wave:N label
-# export GH_FIELD_PLAN="${GH_FIELD_PLAN:-}"       # text field id   ← milestone
-# export GH_FIELD_PKGS="${GH_FIELD_PKGS:-}"       # text field id   ← from shared-pkg:* labels
-# export GH_FIELD_SIZE="${GH_FIELD_SIZE:-}"       # text field id   ← from the size:* label

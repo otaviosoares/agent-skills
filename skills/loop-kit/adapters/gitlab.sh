@@ -2,7 +2,7 @@
 # adapters/gitlab.sh — the GitLab (glab CLI) tracker adapter.
 #
 # Mirrors adapters/github.sh VERB-FOR-VERB (identical cmd_* names) so the dispatcher and runbook
-# never change — TRACKER_BACKEND=gitlab is the only switch. Project values (REPO, RUNLOG, LAND_MODE,
+# never change — TRACKER_BACKEND=gitlab is the only switch. Project values (REPO, RUNLOG,
 # BRANCH_PREFIX) come from plans/loop.config.sh; ./track sources both before dispatch. For a
 # self-hosted instance, export GITLAB_HOST=<host> in the config so glab targets the right server.
 #
@@ -45,7 +45,6 @@ backend=gitlab
 cross_machine_atomic_claim=true
 can_open_pr=true
 can_respond_to_reviews=true
-land_modes=merge,pr
 EOF
 }
 
@@ -108,11 +107,11 @@ cmd_reconcile_mine() {
 cmd_branch_merged() {
   local branch="${1:?branch required}" base="${BASE_BRANCH:-main}"
   git fetch origin "$base" -q 2>/dev/null || true   # avoid a stale origin/$base → false-negative → needless rebuild
-  # merge-commit / rebase landings (merge mode): the branch tip is an ANCESTOR of the base branch.
+  # merge-commit / rebase landings: the branch tip is an ANCESTOR of the base branch.
   if git branch -r --merged "origin/$base" 2>/dev/null | grep -q "/${branch}\$"; then
     echo yes; return 0
   fi
-  # squash landings (PR mode; tip is NOT an ancestor): ask GitLab whether an MR for this SOURCE BRANCH merged.
+  # squash landings (tip is NOT an ancestor): ask GitLab whether an MR for this SOURCE BRANCH merged.
   if _glab mr list --source-branch "$branch" --merged --output json 2>/dev/null | jq -e 'length > 0' >/dev/null 2>&1; then
     echo yes; return 0
   fi
@@ -230,7 +229,9 @@ cmd_release() {
   fi
 }
 
-# CLOSE — terminal, merge-mode. Close FIRST (the terminal op); if it fails and aborts, the issue stays
+# CLOSE — terminal. RECONCILE's stranded-tail fallback: a merged branch whose MR was created degraded
+# (the --fill fallback carries no `Closes #N` keyword) leaves the issue open — this finishes it.
+# Close FIRST (the terminal op); if it fails and aborts, the issue stays
 # OPEN, still assigned + in-progress, so RECONCILE re-finds and re-closes it. De-labelling first would
 # hide a stranded-but-merged issue from reconcile-mine (which filters on the in-progress label).
 cmd_close() {
@@ -239,7 +240,7 @@ cmd_close() {
   _glab issue update "$id" --unlabel in-progress >/dev/null 2>&1 || true
 }
 
-# PR-mode handoff — keep the issue OPEN + assigned so PICK skips it and dependents WAIT for a human merge.
+# Review handoff — keep the issue OPEN + assigned so PICK skips it and dependents stay gated until a human merge.
 cmd_mark_review() {
   local id="${1:?id required}" url="${2:-}"
   _glab issue update "$id" --unlabel in-progress --label in-review >/dev/null
@@ -254,7 +255,7 @@ cmd_log() {
   _glab issue note "$RUNLOG" -m "$body" >/dev/null
 }
 
-# Open an MR for the built branch (PR/MR mode), print its web_url. Idempotent + fail-loud.
+# Open an MR for the built branch, print its web_url. Idempotent + fail-loud.
 cmd_open_pr() {
   local branch="${1:?branch required}" id="${2:?id required}" base="${BASE_BRANCH:-main}" url
   # Idempotent: a prior interrupted run may already have opened the MR — return its url, don't double-create.
@@ -278,7 +279,7 @@ cmd_open_pr() {
   echo "$url"
 }
 
-# ── REVIEW-RESPONSE (PR/MR mode) — drain human review feedback on an already-open MR ──────────────
+# ── REVIEW-RESPONSE — drain human review feedback on an already-open MR ───────────────────────────
 # Mirrors github.sh's review verbs verb-for-verb (same {number,title,pr} / {items[]} / reply_to shapes),
 # so the runbook is identical. GitLab feedback lives in MR DISCUSSIONS: a resolvable discussion = an
 # inline diff thread; an individual/non-resolvable note = a conversation comment. Actionability is the
@@ -392,7 +393,3 @@ cmd_review_reply() {
     _glab_api -X POST "projects/${pid}/merge_requests/${iid}/discussions/${ref}/notes" -f "body=${body}" >/dev/null
   fi
 }
-
-# Board projection — convenience only; the loop reads NOTHING from the board. No-op (GitLab boards are
-# label-driven, so closing/labeling already moves the card).
-cmd_board_done() { :; }
