@@ -31,8 +31,10 @@ export REPO="${REPO:-owner/repo}"
 # share a repo's run-log with another convention.
 export RUNLOG_LABEL="${RUNLOG_LABEL:-loop:runlog}"
 
-# Default queue scope label (the runbook usually passes this explicitly; this is the fallback).
-export WAVE="${WAVE:-wave:1}"
+# The pick queue. PICK selects only OPEN issues carrying this label (whose `track deps` blockers are all
+# closed); it matches the label `/to-tickets` applies to ready tracer-bullet issues. Default
+# ready-for-agent; override only if your tracker marks agent-ready work with a different label.
+export READY_LABEL="${READY_LABEL:-ready-for-agent}"
 
 # Branch / worktree naming. Must stay consistent — RECONCILE's "is it landed?" check greps on it,
 # and it is backend-neutral (avoid host-shaped "Merge #N", which breaks on GitLab's !N MR iids).

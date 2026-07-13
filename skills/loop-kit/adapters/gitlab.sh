@@ -45,6 +45,8 @@ backend=gitlab
 cross_machine_atomic_claim=true
 can_open_pr=true
 can_respond_to_reviews=true
+ready_label=${READY_LABEL:-ready-for-agent}
+runlog_label=${RUNLOG_LABEL:-loop:runlog}
 EOF
 }
 
@@ -52,7 +54,7 @@ EOF
 # (id=iid here). Uses the api + --paginate (one array per page → `jq -s add`) so there is NO silent
 # 100-item cap — the analog of github's `--limit 300`. GitLab open state is `opened`, not `open`.
 cmd_sync_list() {
-  local scope="${1:?scope label required, e.g. wave:4}" pid enc
+  local scope="${1:?scope label required, e.g. ready-for-agent}" pid enc
   pid="$(_project_id)"
   enc="$(_enc "$scope")"
   _glab_api --paginate "projects/${pid}/issues?labels=${enc}&state=opened&per_page=100" \
@@ -149,7 +151,7 @@ cmd_deps() {
 # Shared `## Blocked by` body parser — IDENTICAL to github.sh's (same reason _lc is duplicated: each
 # adapter is self-contained). Read a body on stdin, print each `#K` referenced under a `## Blocked by`
 # heading, deduped, first-seen order; the section ends at the next `#`-heading. Case-insensitive heading,
-tolerant of a trailing `:`.
+# tolerant of a trailing `:`.
 _deps_body() {
   awk '
     /^#+[[:space:]]/ {
