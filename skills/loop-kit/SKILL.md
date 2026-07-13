@@ -1,28 +1,21 @@
 ---
 name: loop-kit
 description: >-
-  Set up and run a context-bounded, multi-runner autonomous build loop driven by an issue
-  tracker (GitHub or GitLab). Use when the user wants to stand up an unattended build loop
-  on a repo, onboard a repo to loop-kit, generate a loop launcher + tracker config, or run
-  or resume the loop. Sub-commands — `init` (onboard a repo, auto-runs first), `config`
-  (edit/add a backend), `run` (launch the loop). The runbook is a shared SKELETON
-  (loop-runbook.md, in the skill, symlinked + auto-updating); per-repo judgment lives in
-  the repo's own CLAUDE.md. The loop spawns a fresh headless `claude -p` per iteration
-  (flat context), each tracker issue is the lock so N runners never collide, and a
-  backend-agnostic `track` dispatcher seams GitHub and GitLab (a local-files backend is
-  planned). The loop never merges — it opens PRs/MRs and the human is always the merge
-  gate. Never authors the backlog, never auto-commits.
+  Stand up and run an AFK build loop on a repo — fresh headless sessions claim tracker issues
+  (GitHub or GitLab), build each with /implement, and open PRs; the human is the merge gate.
+  Use when the user wants to onboard a repo to loop-kit (`init`), edit its tracker config or
+  add a backend (`config`), or launch/resume the loop (`run`).
 ---
 
 # Loop Kit
 
-Stand up (and run) a **context-bounded autonomous build loop** on a repo. The loop has two
-tiers, and the whole point is that **context never fills up**:
+Stand up (and run) an **AFK build loop** on a repo. The loop is **context-flat** — each
+iteration is a **fresh session**, and all durable state lives OUTSIDE the agent:
 
-- An external **driver** (`loop-drive.sh`) spawns a **fresh headless `claude -p` per iteration** —
-  empty context each time. All durable state lives OUTSIDE the agent (tracker issues, labels,
-  a run-log), so each fresh session re-derives it. The driver is stateless: it only decides
-  *when to fire the next session* and *when to stop*, reading a `LOOP_STATUS` sentinel.
+- An external **driver** (`loop-drive.sh`) spawns a fresh headless `claude -p` per iteration.
+  Durable state lives on the tracker (issues, labels, a run-log), so each fresh session
+  re-derives it. The driver is stateless: it only decides *when to fire the next session* and
+  *when to stop*, reading a `LOOP_STATUS` sentinel.
 - Each iteration is a thin **orchestrator** that picks ONE tracker issue, claims it, and delegates
   the build to **fresh sub-agents** whose context is thrown away when they return.
 
@@ -31,8 +24,8 @@ without colliding. A backend-agnostic dispatcher `track <verb>` hides whether th
 (`gh`) or GitLab (`glab`) — the runbook calls verbs, never the underlying CLI directly. (A
 `local`-files backend is designed in REFERENCE.md but ships no adapter yet.)
 
-The loop **never merges**: it builds each issue on its own branch, opens a PR/MR whose description
-carries `Closes #N`, and stops — the human is always the merge gate.
+**The human is the merge gate**: the loop builds each issue on its own branch, opens a PR/MR whose
+description carries `Closes #N`, and stops.
 
 This skill does two things:
 1. **`init`** — onboard a target repo: emit its tracker config + a launcher, and point it at the
@@ -75,15 +68,22 @@ first**, then continue to the requested command. A bare invocation with no argum
 
 ---
 
-## What this skill does NOT do
+## Hard rails
 
-The loop runs `bypassPermissions` and pushes branches + opens PRs unattended. So:
+The loop runs `bypassPermissions` and pushes branches + opens PRs unattended. Three rails bound it:
 
-- **Never author the backlog.** Issue bodies, acceptance criteria, and dependency edges are
-  hand-authored domain judgment (file them via the tracker UI or an authoring skill such as
-  `/to-tickets`); the loop only consumes the queue.
-- **Never merge.** The loop opens the PR/MR and stops; the human is the merge gate.
-- **Never auto-commit.** Emit files into the working tree and STOP. The human reviews and commits.
+- **The human is the merge gate.** The loop opens the PR/MR and stops; merging (which auto-closes
+  the issue) is yours.
+- **The queue is human-authored.** Issue bodies, acceptance criteria, and dependency edges are
+  domain judgment — file them via the tracker UI or an authoring skill such as `/to-tickets`; the
+  loop only consumes the queue.
+- **Emitted files stay uncommitted.** This skill writes into the working tree and STOPs — the human
+  reviews and commits.
+
+Multi-runner identity: N runners need **N distinct tracker logins** in the default `assignee`
+strategy; N agents under ONE login need `CLAIM_STRATEGY=note` plus a stable, distinct per-agent
+**`RUNNER_ID`** (per-agent env on each agent's command line, not `loop.config.sh`), and a login is
+wholly one strategy. Full lock contract: [REFERENCE.md](REFERENCE.md).
 
 ---
 
@@ -96,8 +96,7 @@ The loop runs `bypassPermissions` and pushes branches + opens PRs unattended. So
 
 The runtime layout is identical in both modes (`track`, `loop-drive.sh`, `adapters/`,
 `loop-runbook.md` as siblings), so scaffold-a-copy is literally "copy this dir into
-`plans/loop-kit/`". **Vendoring also PINS the skeleton** (and adapters) at that copy's version —
-the reproducibility knob.
+`plans/loop-kit/`" — and it pins the skeleton, per "PIN the skeleton" above.
 
 ---
 
@@ -105,39 +104,41 @@ the reproducibility knob.
 
 Run from the target repo. The flow is **probe → confirm → emit**: auto-detect everything you can,
 present ONE summary of exactly what will be written (and with which values), and ask the user only
-where a value is genuinely ambiguous or unsafe to assume. **Never overwrite an existing file** — for
-each target, if it already exists, keep it and report `kept existing <path>` instead of writing.
+where a value is genuinely ambiguous or unsafe to assume.
 
 ### Step 0 — probe + plan (silent)
-Gather the detectable facts, then assemble a write-plan. Detect the backend, the multi-runner claim
-strategy, and sensible defaults; mark anything you had to guess as *needs-confirm*.
+Gather the detectable facts, then assemble a write-plan; mark anything you had to guess as
+*needs-confirm*.
+
+- **Backend.** Read the git remote (`git remote get-url origin`):
+  - `github.com` → `TRACKER_BACKEND=github`.
+  - a GitLab host (`gitlab.com` or self-hosted) → `TRACKER_BACKEND=gitlab` + `GITLAB_HOST=<host>`.
+    If the instance is **single-assignee** (GitLab Free / many self-hosted tiers can't multi-assign),
+    default `CLAIM_STRATEGY=note` (the note-marker CAS) — `assignee` strategy silently breaks
+    multi-runner there. When unsure, prefer `note` and say why.
+  - no recognizable remote → *needs-confirm*.
+- **Config values.** `REPO` (owner/name or group/project), `BRANCH_PREFIX`. Leave `BASE_BRANCH`
+  **empty** unless the repo integrates into a non-default branch — it auto-detects the repo's
+  default branch (`origin/HEAD`, falling back to `main`), so a `master`/`trunk` repo needs no
+  config; set it only to pin a specific integration branch (e.g. `develop`). The run-log needs no
+  id — it is the newest open issue labeled `RUNLOG_LABEL` (default `loop:runlog`), auto-created on
+  first `log`; override the label only to reuse an existing convention.
+- **Existing files.** For each target (`plans/loop.config.sh`, `plans/run-loop.sh`), note new vs.
+  already present — **`init` never overwrites**: an existing file is kept and reported as
+  `kept existing <path>`.
 
 ### Step 1 — confirm (one summary, ask only on ambiguity)
-Show the user a compact summary: detected backend + host, the delivery mode, which of
-`loop.config.sh` / `run-loop.sh` are new vs. already present (plus that the repo points at the
-shared `loop-runbook.md` skeleton, no per-repo runbook copy). Then ask — via the AskUserQuestion
-picker, with our real options — ONLY the questions whose answers you couldn't safely infer. Typical
-ambiguous ones: delivery mode (call-from-skill vs scaffold-a-copy), and — when the remote is
-unrecognized — the backend itself. If everything was unambiguous, skip straight to emit after the
-confirmation summary.
+Show the user a compact summary: detected backend + host, the delivery mode, which targets are new
+vs. kept (plus that the repo points at the shared `loop-runbook.md` skeleton — no per-repo runbook
+copy). Then ask — via the AskUserQuestion picker, with our real options — ONLY the *needs-confirm*
+items. Typical ambiguous ones: delivery mode (call-from-skill vs scaffold-a-copy), and — when the
+remote is unrecognized — the backend itself. If everything was unambiguous, skip straight to emit
+after the confirmation summary.
 
-### Step 2 — emit
-1. **Probe the repo.** Read the git remote (`git remote get-url origin`) and detect the backend:
-   - `github.com` → `TRACKER_BACKEND=github`.
-   - a GitLab host (`gitlab.com` or self-hosted) → `TRACKER_BACKEND=gitlab` + `GITLAB_HOST=<host>`.
-     If the instance is **single-assignee** (GitLab Free / many self-hosted tiers can't multi-assign),
-     default `CLAIM_STRATEGY=note` (the note-marker CAS) — `assignee` strategy silently breaks
-     multi-runner there. When unsure, prefer `note` and say why.
-   - no recognizable remote → ask.
-2. **Emit `plans/loop.config.sh`** from [`tracker.config.example.sh`](tracker.config.example.sh).
-   Prompt for / fill: `REPO` (owner/name or group/project), `BRANCH_PREFIX`. The run-log needs no id —
-   it is the newest open issue labeled `RUNLOG_LABEL` (default `loop:runlog`), auto-created on first
-   `log`; override the label only to reuse an existing convention. Leave `BASE_BRANCH` **empty** unless the repo
-   integrates into a non-default branch — it auto-detects the repo's default branch (`origin/HEAD`,
-   falling back to `main`), so a `master`/`trunk` repo needs no config; set it only to pin a
-   specific integration branch (e.g. `develop`). Keep every value as `${VAR:-default}` so env
-   overrides win.
-3. **Emit the launcher** `plans/run-loop.sh` (the one path a human types that can't use
+### Step 2 — emit (writes only)
+1. **Emit `plans/loop.config.sh`** from [`tracker.config.example.sh`](tracker.config.example.sh),
+   filled with the confirmed values. Keep every value as `${VAR:-default}` so env overrides win.
+2. **Emit the launcher** `plans/run-loop.sh` (the one path a human types that can't use
    `$LOOP_KIT_DIR` — the driver is what sets it). It discovers the installed skill and exec's the
    driver, and supports `--print-kit-dir`. A reference copy ships as
    [`run-loop.template.sh`](run-loop.template.sh) — copy it in and `chmod +x`. **No runbook arg**:
@@ -147,18 +148,17 @@ confirmation summary.
    - **scaffold-a-copy:** ALSO copy the kit's runtime files (incl. `loop-runbook.md`) into
      `plans/loop-kit/` and point the launcher at `./plans/loop-kit/…` (see "Two delivery modes").
 
-> Each emit step writes only if the target is **absent**. If `plans/loop.config.sh` /
-> `plans/run-loop.sh` already exist, keep them and report `kept existing …` — `init` is re-run-safe.
+Each emit step writes only if the target is **absent** (per the write-plan). Leave the scaffold
+uncommitted (hard rail); tell the user to review + commit.
 
-### Always
-- **Never auto-commit.** Leave the scaffold in the working tree; tell the user to review + commit.
-- After scaffolding, verify the wiring resolves (don't run a real iteration), **from the repo root**:
-  `./plans/run-loop.sh --print-kit-dir` prints the kit dir, and
-  `KIT="$(./plans/run-loop.sh --print-kit-dir)"; TRACKER_CONFIG="$PWD/plans/loop.config.sh" LOOP_KIT_DIR="$KIT" "$KIT"/track caps`
-  prints the configured backend's capabilities — **confirm `backend=` matches what you set** (without
-  the `TRACKER_CONFIG` export, `track` falls back to the placeholder `REPO=owner/repo` and may report
-  the wrong backend, giving false confidence). Also confirm the skeleton resolves:
-  `ls "$KIT"/loop-runbook.md` (the driver's default `RUNBOOK`).
+### Done when — the wiring check
+`init` is complete when, **from the repo root** (don't run a real iteration):
+1. `./plans/run-loop.sh --print-kit-dir` prints the kit dir;
+2. `KIT="$(./plans/run-loop.sh --print-kit-dir)"; TRACKER_CONFIG="$PWD/plans/loop.config.sh" LOOP_KIT_DIR="$KIT" "$KIT"/track caps`
+   prints the configured backend's capabilities and **`backend=` matches the confirmed plan**
+   (without the `TRACKER_CONFIG` export, `track` falls back to the placeholder `REPO=owner/repo`
+   and may report the wrong backend, giving false confidence);
+3. the skeleton resolves: `ls "$KIT"/loop-runbook.md` (the driver's default `RUNBOOK`).
 
 ---
 
@@ -168,7 +168,7 @@ Use when the repo already has `plans/loop.config.sh` and the user wants to chang
 `CLAIM_STRATEGY`, point at a different `RUNLOG_LABEL`) or **add a second tracker backend**. Read the
 existing config, show the current values, and ask only what's changing (the AskUserQuestion picker,
 our real options). Rewrite **only** `plans/loop.config.sh`. After writing, re-run the wiring check
-from "Always" to confirm `backend=` is right. **Never auto-commit.**
+(`init` → "Done when") to confirm `backend=` is right.
 
 ## `run` — launch/resume the loop (once onboarded)
 
@@ -182,21 +182,20 @@ TRACKER_BACKEND=gitlab ./plans/run-loop.sh
 defaults `RUNBOOK` to the skill's `loop-runbook.md` skeleton and exports `LOOP_KIT_DIR` (the kit
 dir), `TRACKER_CONFIG` (the repo's `plans/loop.config.sh`), and — by sourcing the config —
 `READY_LABEL` / `RUNLOG_LABEL` / `BRANCH_PREFIX` (and the rest of the config) into each spawned
-session. Stop with Ctrl-C anytime — state is external,
-so re-running resumes. The driver tunables (MODEL, EFFORT, MAX_ITERS, WAIT_SECONDS,
-PERMISSION_MODE, …) are documented at the top of `loop-drive.sh`.
+session. Stop with Ctrl-C anytime — state is external, so re-running resumes. The driver tunables
+(MODEL, EFFORT, MAX_ITERS, WAIT_SECONDS, PERMISSION_MODE, …) are documented at the top of
+`loop-drive.sh`.
 
 **Queue hygiene.** Each issue the loop picks MUST carry a **falsifiable Acceptance Criteria
 checklist** (`` `parseConfig('')` returns `{}`, not throws `` — not "handles empty config
-gracefully"). File issues directly — tracker UI, `track`, or an authoring skill — the loop never
-authors them.
+gracefully").
 
 **Standing-loop hazards.**
 - **Merge-debt has no backpressure.** Issues stay OPEN until you merge, and a standing label never
   reaches `COMPLETE` — so nothing bounds the pile of un-merged agent PRs. Rule: **don't refill the
   queue while > N issues sit in-review.** (Review-response — `REVIEW_RESPONSE=on`, default — closes
   the *feedback* half of this: the loop reads your PR comments, fixes the branch, and replies
-  inline. It still never merges — you remain the merge gate — so the don't-refill rule stands.)
+  inline. The human is still the merge gate, so the don't-refill rule stands.)
 - **Cost shape.** The driver defaults to `MODEL=opus EFFORT=high`. For a stream of small edits set
   a cheaper profile — `MODEL=sonnet EFFORT=medium ./plans/run-loop.sh` — and reserve opus/high for
   a deliberate batch.
@@ -206,15 +205,3 @@ authors them.
 **Single change on demand.** To run just one item through the assembly line, file the issue (with
 its Acceptance Criteria checklist) and `MAX_ITERS=1 ./plans/run-loop.sh` — one full build → review →
 fix → PR pass, then the driver stops.
-
-## Rules
-
-- **Never author the backlog** (issue bodies, criteria, dependency edges) — that's the user's
-  domain judgment; the loop only consumes the queue.
-- **Never auto-commit** anything this skill emits.
-- Multi-runner needs **N distinct tracker logins** (one token per user) in the default `assignee`
-  strategy. To run **N agents under ONE login**, set `CLAIM_STRATEGY=note` (github): a per-agent
-  `login#RUNNER_ID` comment-marker CAS that interops with assignee runners on the same issue. Note mode
-  REQUIRES a stable, distinct **`RUNNER_ID` per agent** (passed on each agent's command line, not in
-  `loop.config.sh`) — ownership is identity-based, so a downed agent reups with the same id to recover
-  its claim. Invariant: **a login is wholly one strategy** (mixing under one login double-builds).
