@@ -14,7 +14,7 @@
 #          reviews-pending <scope> | review-read <id> | review-reply <id> <reply_to> <body>
 #   See the kit's REFERENCE.md (or the project's LOOP-KIT.md) for the contract + capability matrix.
 #
-# CONFIG: the per-repo project config (REPO, RUNLOG, …) lives OUTSIDE the kit at
+# CONFIG: the per-repo project config (REPO, RUNLOG_LABEL, …) lives OUTSIDE the kit at
 #   <repo>/plans/loop.config.sh — the kit ships only a sanitized tracker.config.example.sh template.
 #   The driver exports TRACKER_CONFIG to point here; any value is also env-overridable, e.g.:
 #   TRACKER_BACKEND=gitlab "$LOOP_KIT_DIR"/track caps

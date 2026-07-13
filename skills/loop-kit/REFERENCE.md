@@ -73,7 +73,8 @@ always wins.
 `TRACKER_CONFIG` honors a pre-set env value (the driver only defaults it).
 
 `loop.config.sh` keys: `TRACKER_BACKEND` (github|gitlab — `local` is a planned backend, no adapter
-shipped yet), `REVIEW_RESPONSE` (on|off — review-response, default on), `REPO`, `RUNLOG`, `WAVE`
+shipped yet), `REVIEW_RESPONSE` (on|off — review-response, default on), `REPO`, `RUNLOG_LABEL`
+(run-log discovery label, default `loop:runlog` — see "Run-log by label"), `WAVE`
 (default scope label), `BRANCH_PREFIX`, `BASE_BRANCH` (empty = auto-detect the repo's default branch;
 set to pin a non-default integration branch), and `CLAIM_STRATEGY` (assignee|note; github note
 REQUIRES a per-agent `RUNNER_ID` — see the lock contract below).
@@ -86,7 +87,7 @@ The runbook calls these via `"$LOOP_KIT_DIR"/track <verb>`; `TRACKER_BACKEND` se
 |---|---|---|
 | `caps` | print backend capabilities (atomic-claim, can_open_pr, can_respond_to_reviews) | — |
 | `sync-list <scope>` | open work-items in scope as JSON (id,title,labels,assignees,state) | state |
-| `runlog-tail [N]` | last N run-log entries (the resume trail) | state |
+| `runlog-tail [N]` | last N run-log entries from the label-discovered run-log (see below) | state |
 | `view <id>` | one item's body + labels + state + assignees | state |
 | `item-state <id>` | `open\|closed` (the dep gate) | state |
 | `reconcile-mine <scope>` | my in-progress items (the dangling-claim signal) | state |
@@ -97,11 +98,29 @@ The runbook calls these via `"$LOOP_KIT_DIR"/track <verb>`; `TRACKER_BACKEND` se
 | `release <id>` | release my claim (lost race / abort) | lock |
 | `close <id>` | terminal close + remove in-progress — RECONCILE's stranded-tail fallback (a merged branch whose degraded PR carried no `Closes #N`) | state |
 | `mark-review <id> <url>` | remove in-progress, add in-review, keep assignee, note URL | state |
-| `log <body>` | append one run-log entry (arg or stdin) | state |
+| `log <body>` | append one run-log entry (arg or stdin) to the label-discovered run-log (see below) | state |
 | `open-pr <branch> <id>` | push branch + open PR/MR, print URL | — |
 | `reviews-pending <scope>` | my in-review items whose PR has actionable feedback → `[{number,title,pr}]` | state |
 | `review-read <id>` | actionable feedback for #N → `{pr,branch,base,url,items:[{kind,reply_to,path,line,conversation}]}` | state |
 | `review-reply <id> <reply_to> <body>` | post an inline thread reply (`reply_to`=token) or a conversation reply (`reply_to`=`conversation`) | — |
+
+## Run-log by label (no fixed id in the verb contract)
+
+The run-log is **not** a fixed issue id in config. `log` and `runlog-tail` resolve it as the **newest
+OPEN issue carrying `$RUNLOG_LABEL`** (default `loop:runlog`), and **auto-create** one — a
+search-then-create with a deterministic title (`loop-kit run-log`) — when none exists. So the first AFK
+run on a fresh repo makes its own log with zero setup; there is no `RUNLOG` id to fill in.
+
+- **Newest = deterministic.** "Newest" is the highest issue number (github) / iid (gitlab) — monotonic
+  per repo, so both verbs elect the **same** run-log every time. If a rare create race leaves two open
+  labeled issues, both verbs converge on the higher-numbered one (the older duplicate simply goes idle);
+  search-then-create keeps that window small.
+- **Auto-create.** github creates via `gh issue create` (ensuring the label exists first, since GitHub
+  won't auto-create a label); gitlab creates via the issues API (GitLab auto-creates the label on use).
+  An empty `log` (no arg, no piped stdin) is refused **before** resolution, so it never creates a
+  run-log issue.
+- **Configurable.** Set `RUNLOG_LABEL` to point the run-log at a different label; everything else is
+  unchanged. The old fixed `RUNLOG` id is **gone** from config and from the verb contract.
 
 ## The lock contract (every backend satisfies the *guarantee*, not the mechanism)
 

@@ -15,8 +15,9 @@ that delegates each issue to *fresh sub-agents*.
 State and dependencies live **entirely on the tracker** (issues, labels, the run-log) — this runbook
 reads nothing local for state.
 
-> **Current scope: `$WAVE`** (the scope label in `plans/loop.config.sh`). Run-log handle: `RUNLOG`
-> in `plans/loop.config.sh`. Backend: also there.
+> **Current scope: `$WAVE`** (the scope label in `plans/loop.config.sh`). Run-log: the newest open
+> issue labeled `$RUNLOG_LABEL` (default `loop:runlog`), auto-created on first `log` — no fixed id.
+> Backend: also in `plans/loop.config.sh`.
 
 ## Per-repo judgment — the repo's own CLAUDE.md
 Everything that is *project judgment* (build constraints, review lenses, merge hotspots, CI policy)
@@ -232,7 +233,7 @@ Two rules make this work:
 
 ---
 
-## Run-log = the tracker's run-log handle (`RUNLOG` in plans/loop.config.sh)
+## Run-log = the newest open issue labeled `$RUNLOG_LABEL` (auto-created; label in plans/loop.config.sh)
 Append every iteration entry via `"$LOOP_KIT_DIR"/track log "…"`, and **read its last 1–2 entries at
 SYNC** via `"$LOOP_KIT_DIR"/track runlog-tail 2` to recover the resume trail — most importantly a
 trailing `BLOCKED` entry's `Unblock-when:` condition, which RECONCILE (1b-a) re-tests before touching

@@ -25,8 +25,11 @@ export REVIEW_RESPONSE="${REVIEW_RESPONSE:-on}"
 # Repo / owner slug (github: owner/name; gitlab: group/project).
 export REPO="${REPO:-owner/repo}"
 
-# The run-log handle the adapter resolves (github issue number / gitlab issue iid).
-export RUNLOG="${RUNLOG:-<run-log issue#/iid>}"
+# Run-log discovery label. The run-log is no longer a fixed issue id: `track log` / `track runlog-tail`
+# resolve the NEWEST open issue carrying this label, auto-creating one (deterministic title) if none
+# exists — so the first AFK run makes its own log with zero setup. Default loop:runlog; override only to
+# share a repo's run-log with another convention.
+export RUNLOG_LABEL="${RUNLOG_LABEL:-loop:runlog}"
 
 # Default queue scope label (the runbook usually passes this explicitly; this is the fallback).
 export WAVE="${WAVE:-wave:1}"
