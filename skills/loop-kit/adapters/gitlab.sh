@@ -2,7 +2,7 @@
 # adapters/gitlab.sh — the GitLab (glab CLI) tracker adapter.
 #
 # Mirrors adapters/github.sh VERB-FOR-VERB (identical cmd_* names) so the dispatcher and runbook
-# never change — TRACKER_BACKEND=gitlab is the only switch. Project values (REPO, RUNLOG,
+# never change — TRACKER_BACKEND=gitlab is the only switch. Project values (REPO, RUNLOG_LABEL,
 # BRANCH_PREFIX) come from plans/loop.config.sh; ./track sources both before dispatch. For a
 # self-hosted instance, export GITLAB_HOST=<host> in the config so glab targets the right server.
 #
@@ -59,13 +59,45 @@ cmd_sync_list() {
     | jq -s 'add // [] | [.[] | {iid, title, labels, assignees: [.assignees[].username], state}]'
 }
 
-# Run-log resume trail — last N non-system notes, chronological. sort=desc + first-N + reverse so a
-# run-log with >100 notes still yields the NEWEST N (a naive sort=asc first page would return the
-# OLDEST). System notes (label/assignee events) are excluded — only human entries are the trail.
+# ── Run-log resolution by LABEL (no fixed id in config) ───────────────────────────────────────────
+# Mirrors github.sh: the run-log is the newest OPEN issue carrying $RUNLOG_LABEL (default loop:runlog);
+# if none exists it is auto-created (search-then-create). A rare create race resolves deterministically
+# to the highest-iid (= newest) issue, so `log` and `runlog-tail` agree. GitLab auto-creates a label on
+# first use, so (unlike github) the create path needs no explicit label-create step.
+_runlog_label() { printf '%s' "${RUNLOG_LABEL:-loop:runlog}"; }
+# Deterministic title (spec: "deterministic title") — a fixed literal, NOT env-overridable: the label is
+# the only knob, so the run-log is found the same way no matter who created it.
+_runlog_title() { printf '%s' 'loop-kit run-log'; }
+
+# The pure selection over the `--paginate` STREAM of per-page arrays (slurped with `jq -s`): newest =
+# highest iid, or "empty" → create. Its own jq program so tests can pin it without a live repo.
+_runlog_pick_jq() { printf '%s' 'add // [] | [.[].iid] | max // empty'; }
+
+# Resolve the run-log issue iid, creating it if absent. Prints the iid ("" on hard failure).
+_runlog_id() {
+  local label enc pid iid
+  label="$(_runlog_label)"; enc="$(_enc "$label")"
+  pid="$(_project_id 2>/dev/null || true)"; [[ -n "$pid" ]] || { echo ""; return 0; }
+  iid="$(_glab_api --paginate "projects/${pid}/issues?labels=${enc}&state=opened&per_page=100" 2>/dev/null \
+          | jq -s "$(_runlog_pick_jq)" 2>/dev/null || true)"
+  if [[ -n "$iid" && "$iid" != "null" ]]; then echo "$iid"; return 0; fi
+  # None yet → create via the API (deterministic + non-interactive; GitLab auto-creates the label).
+  iid="$(_glab_api -X POST "projects/${pid}/issues" \
+           -f "title=$(_runlog_title)" -f "labels=${label}" \
+           -f "description=Run-log for the loop-kit AFK loop. Auto-created; discovered by the \`${label}\` label." \
+           2>/dev/null | jq -r '.iid // empty' 2>/dev/null || true)"
+  [[ "$iid" =~ ^[0-9]+$ ]] && echo "$iid" || echo ""
+}
+
+# Run-log resume trail — last N non-system notes, chronological, from the label-discovered run-log.
+# sort=desc + first-N + reverse so a run-log with >100 notes still yields the NEWEST N (a naive sort=asc
+# first page would return the OLDEST). System notes (label/assignee events) are excluded — only entries.
 cmd_runlog_tail() {
-  local n="${1:-2}" pid
+  local n="${1:-2}" pid id
   pid="$(_project_id)"
-  _glab_api "projects/${pid}/issues/${RUNLOG}/notes?sort=desc&order_by=created_at&per_page=100" \
+  id="$(_runlog_id)"
+  [[ -n "$id" ]] || { echo "✋ runlog-tail: no run-log issue and could not create one (label $(_runlog_label))" >&2; return 1; }
+  _glab_api "projects/${pid}/issues/${id}/notes?sort=desc&order_by=created_at&per_page=100" \
     | jq -r "[.[] | select(.system==false)] | .[0:${n}] | reverse | .[].body"
 }
 
@@ -290,12 +322,16 @@ cmd_mark_review() {
   if [[ -n "$url" ]]; then _glab issue note "$id" -m "MR opened: ${url} — awaiting human merge." >/dev/null || true; fi
 }
 
-# LOG — append one run-log entry (arg or stdin). Refuse empty (no blank note, no stdin hang on a tty).
+# LOG — append one run-log entry (arg or stdin) to the label-discovered run-log (auto-created if absent).
+# Refuse empty (no blank note, no stdin hang on a tty) — and resolve the body BEFORE _runlog_id so an
+# empty log never creates a run-log issue.
 cmd_log() {
-  local body="${1:-}"
+  local body="${1:-}" id
   if [[ -z "$body" && ! -t 0 ]]; then body="$(cat)"; fi
   if [[ -z "$body" ]]; then echo "✋ log: empty entry (pass a body arg or pipe content)" >&2; return 64; fi
-  _glab issue note "$RUNLOG" -m "$body" >/dev/null
+  id="$(_runlog_id)"
+  [[ -n "$id" ]] || { echo "✋ log: no run-log issue and could not create one (label $(_runlog_label))" >&2; return 1; }
+  _glab issue note "$id" -m "$body" >/dev/null
 }
 
 # Open an MR for the built branch, print its web_url. Idempotent + fail-loud.

@@ -130,8 +130,9 @@ confirmation summary.
      multi-runner there. When unsure, prefer `note` and say why.
    - no recognizable remote → ask.
 2. **Emit `plans/loop.config.sh`** from [`tracker.config.example.sh`](tracker.config.example.sh).
-   Prompt for / fill: `REPO` (owner/name or group/project), `RUNLOG` (the run-log issue handle —
-   may not exist yet; note it), `BRANCH_PREFIX`. Leave `BASE_BRANCH` **empty** unless the repo
+   Prompt for / fill: `REPO` (owner/name or group/project), `BRANCH_PREFIX`. The run-log needs no id —
+   it is the newest open issue labeled `RUNLOG_LABEL` (default `loop:runlog`), auto-created on first
+   `log`; override the label only to reuse an existing convention. Leave `BASE_BRANCH` **empty** unless the repo
    integrates into a non-default branch — it auto-detects the repo's default branch (`origin/HEAD`,
    falling back to `main`), so a `master`/`trunk` repo needs no config; set it only to pin a
    specific integration branch (e.g. `develop`). Keep every value as `${VAR:-default}` so env
@@ -164,7 +165,7 @@ confirmation summary.
 ## `config` — edit values or add a backend (already-onboarded repo)
 
 Use when the repo already has `plans/loop.config.sh` and the user wants to change something (switch
-`CLAIM_STRATEGY`, point at a different `RUNLOG`) or **add a second tracker backend**. Read the
+`CLAIM_STRATEGY`, point at a different `RUNLOG_LABEL`) or **add a second tracker backend**. Read the
 existing config, show the current values, and ask only what's changing (the AskUserQuestion picker,
 our real options). Rewrite **only** `plans/loop.config.sh`. After writing, re-run the wiring check
 from "Always" to confirm `backend=` is right. **Never auto-commit.**

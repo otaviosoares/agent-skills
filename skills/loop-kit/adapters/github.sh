@@ -2,7 +2,7 @@
 # adapters/github.sh — the GitHub (gh CLI) tracker adapter. REFERENCE backend.
 #
 # Defines cmd_<verb> functions invoked by ./track. Each is a faithful wrapper of the exact gh
-# command the original runbook used to inline. Project values (REPO, RUNLOG,
+# command the original runbook used to inline. Project values (REPO, RUNLOG_LABEL,
 # BRANCH_PREFIX) come from tracker.config.sh; ./track sources both before dispatch.
 #
 # The lock CONTRACT this adapter satisfies (see LOOP-KIT.md): of N racing runners, exactly one
@@ -58,10 +58,41 @@ cmd_sync_list() {
     --json number,title,labels,assignees,state
 }
 
-# Run-log resume trail — last N entries.
+# ── Run-log resolution by LABEL (no fixed id in config) ───────────────────────────────────────────
+# The run-log is the newest OPEN issue carrying $RUNLOG_LABEL (default loop:runlog); if none exists it
+# is auto-created (search-then-create, so the duplicate window is small) — the first AFK run on a repo
+# makes its own log with zero setup. A rare create race can leave >1 open labeled issue; both verbs then
+# resolve deterministically to the highest-numbered (= newest) one, so `log` and `runlog-tail` agree.
+_runlog_label() { printf '%s' "${RUNLOG_LABEL:-loop:runlog}"; }
+# Deterministic title (spec: "deterministic title") — a fixed literal, NOT env-overridable: the label is
+# the only knob, so the run-log is found the same way no matter who created it.
+_runlog_title() { printf '%s' 'loop-kit run-log'; }
+
+# The pure selection over `gh issue list --json number`: newest = highest number, or "empty" → create.
+# Kept as its own jq program so tests/runlog-discovery.test.sh can pin it without a live repo.
+_runlog_pick_jq() { printf '%s' '[.[].number] | max // empty'; }
+
+# Resolve the run-log issue number, creating it if absent. Prints the number ("" on hard failure).
+_runlog_id() {
+  local label id url
+  label="$(_runlog_label)"
+  id="$(_gh issue list --label "$label" --state open --limit 100 --json number --jq "$(_runlog_pick_jq)" 2>/dev/null || true)"
+  if [[ -n "$id" ]]; then echo "$id"; return 0; fi
+  # None yet → search-then-create. `gh issue create` needs the label to EXIST (unlike GitLab's
+  # auto-create), so ensure it first; `|| true` because a pre-existing label makes `label create` non-zero.
+  _gh label create "$label" --description "loop-kit run-log" >/dev/null 2>&1 || true
+  url="$(_gh issue create --title "$(_runlog_title)" --label "$label" \
+           --body "Run-log for the loop-kit AFK loop. Auto-created; discovered by the \`${label}\` label." 2>/dev/null || true)"
+  id="${url##*/}"                      # gh prints the new issue's URL; the number is its last path segment
+  [[ "$id" =~ ^[0-9]+$ ]] && echo "$id" || echo ""
+}
+
+# Run-log resume trail — last N entries from the label-discovered run-log.
 cmd_runlog_tail() {
-  local n="${1:-2}"
-  _gh issue view "$RUNLOG" --json comments --jq ".comments[-${n}:][].body"
+  local n="${1:-2}" id
+  id="$(_runlog_id)"
+  [[ -n "$id" ]] || { echo "✋ runlog-tail: no run-log issue and could not create one (label $(_runlog_label))" >&2; return 1; }
+  _gh issue view "$id" --json comments --jq ".comments[-${n}:][].body"
 }
 
 # One item, full. — used for the brief, dep parse, contention skip.
@@ -289,14 +320,17 @@ cmd_mark_review() {
   [[ -n "$url" ]] && _gh issue comment "$id" --body "PR opened: ${url} — awaiting human merge." >/dev/null || true
 }
 
-# LOG — append one run-log entry (arg or stdin).
+# LOG — append one run-log entry (arg or stdin) to the label-discovered run-log (auto-created if absent).
 cmd_log() {
-  local body="${1:-}"
+  local body="${1:-}" id
   # Read stdin only if there's no arg AND stdin is piped (not a tty → won't block waiting for EOF).
   if [[ -z "$body" && ! -t 0 ]]; then body="$(cat)"; fi
-  # Refuse to post an empty entry (covers: tty with no arg, and headless /dev/null/empty-pipe). No blank comment, no hang.
+  # Refuse to post an empty entry (covers: tty with no arg, and headless /dev/null/empty-pipe). No blank
+  # comment, no hang — and resolve the body BEFORE _runlog_id so an empty log never creates a run-log issue.
   if [[ -z "$body" ]]; then echo "✋ log: empty entry (pass a body arg or pipe content)" >&2; return 64; fi
-  _gh issue comment "$RUNLOG" --body "$body" >/dev/null
+  id="$(_runlog_id)"
+  [[ -n "$id" ]] || { echo "✋ log: no run-log issue and could not create one (label $(_runlog_label))" >&2; return 1; }
+  _gh issue comment "$id" --body "$body" >/dev/null
 }
 
 # Open a PR for the built branch, print its URL.
