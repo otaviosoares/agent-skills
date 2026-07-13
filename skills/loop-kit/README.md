@@ -1,5 +1,3 @@
-<!-- loop-kit v2: this README is rewritten by the "README + migration docs" ticket (#11);
-     until then it documents only what survives the v2 deletions. -->
 # loop-kit
 
 Set up and run a **context-bounded, multi-runner autonomous build loop** driven by an issue tracker
@@ -12,6 +10,28 @@ colliding. A backend-agnostic dispatcher `track <verb>` seams GitHub (`gh`) and 
 the runbook calls verbs, never `gh`/`glab` directly. (A `local`-files backend is designed but not
 yet shipped.) The loop **never merges**: it opens a PR/MR whose description carries `Closes #N` and
 stops — the human is always the merge gate.
+
+## Where it fits in the skill flow
+
+loop-kit is the **AFK build stage**, not the planner. Planning lives upstream:
+
+```
+/grilling  →  /to-tickets  →  loop-kit (this skill)  →  you merge
+ spec        ready-for-agent    claim → build → open PR      the merge gate
+             issues + blocking   in a fresh session, repeat
+             edges
+```
+
+- **`/grilling`** stress-tests an idea into a spec.
+- **`/to-tickets`** publishes that spec as tracer-bullet issues with native blocking edges and a
+  `ready-for-agent` label.
+- **loop-kit** repeatedly claims one `ready-for-agent` issue whose blockers are all closed, builds it
+  with **`/implement`** in a per-issue worktree, opens a PR/MR that `Closes #N`, and stops when nothing
+  is pickable — always in a fresh session so context never fills.
+- **You** review and merge. Merging auto-closes the issue and re-arms its dependents.
+
+The kit owns *only* that AFK stage. It never authors the backlog and never merges — see
+"[What each adapter needs](#what-each-adapter-needs)" and the safety note below.
 
 ## What's in here
 
@@ -57,3 +77,41 @@ See [SKILL.md](SKILL.md). The contract (verbs, the lock guarantees, the capabili
 - **call-from-skill** (default) — the repo keeps no copy; its launcher locates the installed skill.
 - **scaffold-a-copy** — the skill vendors the runtime into the repo's `plans/loop-kit/` (for a repo or
   CI that can't assume the skill is installed). Same layout either way.
+
+## Queue hygiene: mind the merge-debt
+
+Because the loop never merges, every PR it opens sits OPEN until you merge it, and a standing
+`ready-for-agent` queue never reaches `COMPLETE`. Nothing in the code bounds the pile of un-merged
+agent PRs, so keep one rule in view:
+
+> **Don't refill the queue while more than N issues sit in-review.**
+
+Merge (or close) the in-review work before adding more, so review-debt stays bounded. Review-response
+(`REVIEW_RESPONSE=on`, the default) closes the *feedback* half — the loop reads your PR comments, fixes
+the branch, and replies inline — but it still never merges, so the don't-refill rule stands. See
+[SKILL.md](SKILL.md) ("Standing-loop hazards") for the full backpressure discussion.
+
+## Migrating from v1
+
+v2 has **no migration code** — `init` is non-destructive and keeps any file that already exists, so an
+onboarded v1 repo (e.g. `ezk`) must be updated by hand. On each repo already running v1:
+
+1. **Rewrite `plans/loop.config.sh`.** Drop `WAVE`, `RUNLOG` (the fixed run-log id), and `LAND_MODE`;
+   add `READY_LABEL` (default `ready-for-agent`) and `RUNLOG_LABEL` (default `loop:runlog`). Every
+   value is `${VAR:-default}`, so you only set what differs from the defaults.
+2. **Delete the per-repo judgment files** — `plans/loop.recipes.md`, `plans/loop.scope.md`, and any
+   `plans/wave-loop.md`. Anything in them worth keeping (build constraints, review lenses, merge
+   hotspots) moves into the **repo's own CLAUDE.md**, which every fresh `/implement` session reads
+   anyway.
+3. **Point the run-log at a label.** Label the existing run-log issue `loop:runlog` (or whatever you
+   set `RUNLOG_LABEL` to) — or just let the loop create a fresh one on its first iteration.
+4. **Ensure the queue is agent-ready.** Open tickets carry the `ready-for-agent` label and their
+   blocking links (`## Blocked by` in the body, or native issue links). `/to-tickets` output already
+   does both.
+
+> **Accepted caveat:** because `init` never overwrites, re-running it on a v1 repo will **not** fix a
+> stale `plans/loop.config.sh` — step 1 is a manual edit.
+
+Nothing else carries over: waves, keystones, `plan`/`materialize`/`migrate`, the ClickUp backend, and
+the `LAND_MODE=merge` machinery are all gone. If your v1 setup relied on them, that workflow now lives
+in `/grilling` + `/to-tickets` upstream (planning) and the human merge gate (landing).
