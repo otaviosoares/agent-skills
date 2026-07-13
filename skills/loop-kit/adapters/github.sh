@@ -75,6 +75,46 @@ cmd_item_state() {
   _gh issue view "${1:?id required}" --json state --jq '.state' | tr '[:upper:]' '[:lower:]'
 }
 
+# DEPS — the ids of issues blocking N, one per line (empty = unblocked). PICK gates on state: N is
+# unblocked iff every id printed here is `closed` (via item-state). Two sources, native first:
+#   1. GitHub's NATIVE issue dependencies (the UI-visible `blocked_by` edges). The endpoint returns an
+#      array of blocker ISSUE objects; every one counts (open or closed — deps only enumerates, PICK
+#      gates). `gh api` takes no -R, so REPO is in the path (like cmd_claim's `gh api user`).
+#   2. FALLBACK when there are no native edges: parse a `## Blocked by` section from the body (what
+#      /to-tickets writes on tiers without native links). Native present → body is ignored.
+_deps_native_filter() { printf '%s' '.[] | .number'; }   # blocked_by array → blocker numbers (testable, cf. _owner_filter)
+
+cmd_deps() {
+  local id="${1:?id required}" native body
+  # `|| true` (+ 2>/dev/null): a repo/tier without the dependencies API, or a transient error, must fall
+  # through to the body parse, never abort the dispatcher under set -e mid-iteration.
+  native="$(gh api "repos/${REPO}/issues/${id}/dependencies/blocked_by" --jq "$(_deps_native_filter)" 2>/dev/null || true)"
+  if [[ -n "${native//[[:space:]]/}" ]]; then printf '%s\n' "$native"; return 0; fi
+  body="$(_gh issue view "$id" --json body --jq '.body' 2>/dev/null || true)"
+  printf '%s' "$body" | _deps_body
+}
+
+# Shared `## Blocked by` body parser (identical in both adapters — same reason _lc is): read a body on
+# stdin, print each `#K` referenced under a `## Blocked by` heading, deduped, first-seen order. The
+# section ends at the next `#`-heading. Case-insensitive on the heading, tolerant of a trailing `:`;
+refs elsewhere are ignored.
+_deps_body() {
+  awk '
+    /^#+[[:space:]]/ {
+      inblk = (tolower($0) ~ /^#+[[:space:]]+blocked[[:space:]]+by[[:space:]]*:?[[:space:]]*$/)
+      next
+    }
+    inblk {
+      s = $0
+      while (match(s, /#[0-9]+/)) {
+        n = substr(s, RSTART + 1, RLENGTH - 1)
+        if (!(n in seen)) { seen[n] = 1; print n }
+        s = substr(s, RSTART + RLENGTH)
+      }
+    }
+  '
+}
+
 # RECONCILE — my in-progress items in scope (the dangling-claim signal).
 cmd_reconcile_mine() {
   local scope="${1:?scope label required}"

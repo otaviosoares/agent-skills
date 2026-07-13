@@ -8,7 +8,7 @@
 # so sourced functions wouldn't persist — a dispatcher does).
 #
 # USAGE:  "$LOOP_KIT_DIR"/track <verb> [args…]   (vendored: ./plans/loop-kit/track <verb> [args…])
-#   verbs: caps | sync-list <scope> | runlog-tail [N] | view <id> | item-state <id>
+#   verbs: caps | sync-list <scope> | runlog-tail [N] | view <id> | item-state <id> | deps <id>
 #          reconcile-mine <scope> | branch-merged <branch> | claim <id> | claim-owner <id> | whoami
 #          release <id> | close <id> | mark-review <id> <url> | log <body> | open-pr <branch> <id>
 #          reviews-pending <scope> | review-read <id> | review-reply <id> <reply_to> <body>
