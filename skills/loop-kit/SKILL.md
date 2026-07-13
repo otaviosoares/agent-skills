@@ -181,7 +181,8 @@ TRACKER_BACKEND=gitlab ./plans/run-loop.sh
 `run-loop.sh` locates the installed skill and exec's `loop-drive.sh`, which (with no runbook arg)
 defaults `RUNBOOK` to the skill's `loop-runbook.md` skeleton and exports `LOOP_KIT_DIR` (the kit
 dir), `TRACKER_CONFIG` (the repo's `plans/loop.config.sh`), and — by sourcing the config —
-`WAVE` / `BRANCH_PREFIX` into each spawned session. Stop with Ctrl-C anytime — state is external,
+`READY_LABEL` / `RUNLOG_LABEL` / `BRANCH_PREFIX` (and the rest of the config) into each spawned
+session. Stop with Ctrl-C anytime — state is external,
 so re-running resumes. The driver tunables (MODEL, EFFORT, MAX_ITERS, WAIT_SECONDS,
 PERMISSION_MODE, …) are documented at the top of `loop-drive.sh`.
 
