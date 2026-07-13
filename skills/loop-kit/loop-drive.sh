@@ -24,8 +24,9 @@
 #
 #   The driver derives the TARGET repo from the CWD and exports into each spawned session: LOOP_KIT_DIR
 #   (this dir), TRACKER_CONFIG (the repo's plans/loop.config.sh), and — by sourcing the config —
-#   WAVE / BRANCH_PREFIX (and the rest of the config). The skeleton's "$LOOP_KIT_DIR"/track verb calls
-#   then resolve against the right repo's config, and its "$WAVE"/"$BRANCH_PREFIX" references resolve too.
+#   READY_LABEL / BRANCH_PREFIX (and the rest of the config). The skeleton's "$LOOP_KIT_DIR"/track verb
+#   calls then resolve against the right repo's config, and its "$READY_LABEL"/"$BRANCH_PREFIX" references
+#   resolve too.
 #
 #   Watch:  the live feed prints each iteration's tool calls; or `tail -f` the log path below.
 #   Stop:   Ctrl-C  (safe — state is external; just re-run to resume).
@@ -105,10 +106,10 @@ EXTRA_CONTEXT="$*"
 export LOOP_KIT_DIR="$SCRIPT_DIR"
 export TRACKER_CONFIG="${TRACKER_CONFIG:-$REPO_ROOT/plans/loop.config.sh}"
 
-# Source the config into the REAL env so WAVE / BRANCH_PREFIX (and the rest) are available to the
-# spawned session's bash calls — the skeleton's verb calls pass "$WAVE" and branch as "$BRANCH_PREFIX/…".
+# Source the config into the REAL env so READY_LABEL / BRANCH_PREFIX (and the rest) are available to the
+# spawned session's bash calls — the skeleton's verb calls pass "$READY_LABEL" and branch as "$BRANCH_PREFIX/…".
 # `set -a` exports everything the config sets; every config value uses ${VAR:-default}, so a pre-set env
-# value (e.g. WAVE=wave:6 on this launch) still WINS — sourcing respects it rather than clobbering it.
+# value (e.g. READY_LABEL=ready-2 on this launch) still WINS — sourcing respects it rather than clobbering it.
 # (The CLAIM_STRATEGY preflight below still sources in a SUBSHELL for its own read; this is the one that
 # exports into the driver's real environment.)
 [[ -f "$TRACKER_CONFIG" ]] && { set -a; . "$TRACKER_CONFIG"; set +a; }

@@ -48,12 +48,14 @@ backend=github
 cross_machine_atomic_claim=true
 can_open_pr=true
 can_respond_to_reviews=true
+ready_label=${READY_LABEL:-ready-for-agent}
+runlog_label=${RUNLOG_LABEL:-loop:runlog}
 EOF
 }
 
 # SYNC — open work-items in scope. --limit 300 fixes gh's silent default of 30.
 cmd_sync_list() {
-  local scope="${1:?scope label required, e.g. wave:4}"
+  local scope="${1:?scope label required, e.g. ready-for-agent}"
   _gh issue list --label "$scope" --state open --limit 300 \
     --json number,title,labels,assignees,state
 }
@@ -128,7 +130,7 @@ cmd_deps() {
 # Shared `## Blocked by` body parser (identical in both adapters — same reason _lc is): read a body on
 # stdin, print each `#K` referenced under a `## Blocked by` heading, deduped, first-seen order. The
 # section ends at the next `#`-heading. Case-insensitive on the heading, tolerant of a trailing `:`;
-refs elsewhere are ignored.
+# refs elsewhere are ignored.
 _deps_body() {
   awk '
     /^#+[[:space:]]/ {

@@ -60,10 +60,12 @@ always wins.
 - `LOOP_KIT_DIR` — the kit dir (where `track` + `adapters/` + `loop-runbook.md` live);
   the skeleton's verb calls are `"$LOOP_KIT_DIR"/track …`.
 - `TRACKER_CONFIG` — `<repo>/plans/loop.config.sh` (so `track`'s first resolution branch always hits).
-- `WAVE`, `BRANCH_PREFIX` (+ the rest of the config) — the driver **sources `loop.config.sh` into its
-  real env** (`set -a; . "$TRACKER_CONFIG"; set +a`) so the skeleton's `"$WAVE"` and `"$BRANCH_PREFIX/…"`
-  references resolve in the agent's bash calls. Because the config uses `${VAR:-default}`, a value pre-set
-  on the launch still **wins** — sourcing respects it.
+- `READY_LABEL`, `RUNLOG_LABEL`, `BRANCH_PREFIX` (+ the rest of the config) — the driver **sources
+  `loop.config.sh` into its real env** (`set -a; . "$TRACKER_CONFIG"; set +a`) so the skeleton's
+  `"$READY_LABEL"` and `"$BRANCH_PREFIX/…"` references resolve in the agent's bash calls. Because the
+  config uses `${VAR:-default}`, a value pre-set on the launch still **wins** — sourcing respects it.
+  (`track caps` echoes the resolved `ready_label=` / `runlog_label=`, so the wiring check confirms the
+  config plumbing and an override without needing the network.)
 - `BASE_BRANCH` — the integration branch (rebase target, PR base, the `branch-merged` check). Both
   the driver and `track` source `resolve-base-branch.sh` **after** the config, so an explicit
   env/config value wins; otherwise it auto-detects the repo's default branch (`origin/HEAD`, probing
@@ -73,9 +75,10 @@ always wins.
 `TRACKER_CONFIG` honors a pre-set env value (the driver only defaults it).
 
 `loop.config.sh` keys: `TRACKER_BACKEND` (github|gitlab — `local` is a planned backend, no adapter
-shipped yet), `REVIEW_RESPONSE` (on|off — review-response, default on), `REPO`, `RUNLOG_LABEL`
-(run-log discovery label, default `loop:runlog` — see "Run-log by label"), `WAVE`
-(default scope label), `BRANCH_PREFIX`, `BASE_BRANCH` (empty = auto-detect the repo's default branch;
+shipped yet), `REVIEW_RESPONSE` (on|off — review-response, default on), `REPO`, `READY_LABEL`
+(the pick queue, default `ready-for-agent` — the label `/to-tickets` applies to agent-ready issues),
+`RUNLOG_LABEL` (run-log discovery label, default `loop:runlog` — see "Run-log by label"),
+`BRANCH_PREFIX`, `BASE_BRANCH` (empty = auto-detect the repo's default branch;
 set to pin a non-default integration branch), and `CLAIM_STRATEGY` (assignee|note; github note
 REQUIRES a per-agent `RUNNER_ID` — see the lock contract below).
 
@@ -85,7 +88,7 @@ The runbook calls these via `"$LOOP_KIT_DIR"/track <verb>`; `TRACKER_BACKEND` se
 
 | verb | purpose | criticality |
 |---|---|---|
-| `caps` | print backend capabilities (atomic-claim, can_open_pr, can_respond_to_reviews) | — |
+| `caps` | print backend capabilities (atomic-claim, can_open_pr, can_respond_to_reviews) + the resolved `ready_label` / `runlog_label` (the config-plumbing/override probe used by the wiring check) | — |
 | `sync-list <scope>` | open work-items in scope as JSON (id,title,labels,assignees,state) | state |
 | `runlog-tail [N]` | last N run-log entries from the label-discovered run-log (see below) | state |
 | `view <id>` | one item's body + labels + state + assignees | state |
