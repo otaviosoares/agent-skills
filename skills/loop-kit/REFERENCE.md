@@ -1,6 +1,3 @@
-<!-- loop-kit v2: this reference is refreshed by the v2 doc tickets (runbook skeleton #9,
-     config surface #8, README/migration #11); until then it documents only what survives
-     the v2 deletions. -->
 # Loop Kit — reference
 
 The contract behind the skill: the tracker verbs, the lock guarantees, the capability matrix, and
