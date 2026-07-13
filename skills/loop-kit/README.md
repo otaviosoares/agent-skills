@@ -80,16 +80,12 @@ See [SKILL.md](SKILL.md). The contract (verbs, the lock guarantees, the capabili
 
 ## Queue hygiene: mind the merge-debt
 
-Because the loop never merges, every PR it opens sits OPEN until you merge it, and a standing
-`ready-for-agent` queue never reaches `COMPLETE`. Nothing in the code bounds the pile of un-merged
-agent PRs, so keep one rule in view:
+The human is the merge gate, so nothing in the code bounds the pile of un-merged agent PRs. One rule:
 
 > **Don't refill the queue while more than N issues sit in-review.**
 
-Merge (or close) the in-review work before adding more, so review-debt stays bounded. Review-response
-(`REVIEW_RESPONSE=on`, the default) closes the *feedback* half — the loop reads your PR comments, fixes
-the branch, and replies inline — but it still never merges, so the don't-refill rule stands. See
-[SKILL.md](SKILL.md) ("Standing-loop hazards") for the full backpressure discussion.
+Review-response (`REVIEW_RESPONSE=on`, the default) drains your PR feedback back into the branch,
+but the don't-refill rule stands — see [SKILL.md](SKILL.md) ("Standing-loop hazards").
 
 ## Migrating from v1
 

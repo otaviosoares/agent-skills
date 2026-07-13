@@ -24,24 +24,18 @@ Two invariants make it resumable after any crash/restart/summarization:
 
 ### The `LOOP_STATUS` sentinel (the driver's only input from the agent)
 - `CONTINUE` — did a unit of work; pickable work likely remains → fire the next fresh session.
-- `WAIT` — work remains but nothing pickable now (a dep is in-flight on another runner) → sleep, re-run.
+- `WAIT` — *driver compat only; the skeleton never emits it* (in MR-only mode a starved queue is
+  `COMPLETE` — nothing unblocks without the human merging, so sleeping buys nothing) → sleep, re-run.
 - `COMPLETE` — nothing left → exit 0.
 - `BLOCKED` — a human decision/input is needed → exit 2.
 - *(implicit)* INTERRUPTED — non-zero exit + no sentinel → state UNKNOWN; the driver backs off and
   retries (bounded by `MAX_FAILS`); the runbook's RECONCILE step self-heals the dangling claim.
 
-## The runbook: a shared SKELETON
+## The runbook skeleton
 
-- **`loop-runbook.md`** — the canonical **skeleton** (backend/project-neutral state machine). It lives
-  **in the kit** and is **symlinked** into each onboarded repo, like `track`/`adapters/`/`loop-drive.sh` —
-  so a skeleton change propagates everywhere with no per-repo copy to go stale. The driver defaults
-  `RUNBOOK` to it, so `./plans/run-loop.sh` (no runbook arg) uses it.
-- **Per-repo judgment** (build constraints, review lenses, merge hotspots) lives in the target repo's
-  own CLAUDE.md, which every fresh session reads anyway. The kit ships no judgment file.
-
-**Pinning for reproducibility** uses the same knob as `adapters/`: the symlink/checkout. Vendor the kit
-into `<repo>/plans/loop-kit/` (delivery mode "scaffold-a-copy") or install a pinned skill version to
-freeze the skeleton; otherwise a skeleton update moves under the next iteration (usually what you want).
+The driver defaults `RUNBOOK` to the kit's `loop-runbook.md` — the backend/project-neutral state
+machine, symlinked into each onboarded repo. Per-repo judgment lives in the repo's own CLAUDE.md;
+the full story (symlink propagation, pinning via scaffold-a-copy) is in [SKILL.md](SKILL.md).
 
 ## Config + env resolution
 

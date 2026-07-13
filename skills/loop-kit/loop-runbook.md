@@ -5,16 +5,12 @@
   the env the driver exports into each session, and how to run a step interactively: see SKILL.md,
   REFERENCE.md, and the loop-drive.sh header.
 -->
-# Build Loop — context-bounded, multi-runner, MR-only, tracker-driven
+# Build Loop — context-flat, multi-runner, MR-only, tracker-driven
 
-A **context-bounded AFK build loop** that one or more people run **simultaneously** on separate
-machines. Everyone runs the *same* driver; they never collide because **each tracker issue is the
-lock**, and **context never fills up** because each iteration is a *fresh headless session* — a thin
-orchestrator that claims one ready issue, delegates the build to a *fresh `/implement` sub-agent*,
-opens an MR that `Closes #N`, and stops. **The human is always the merge gate** — the loop never merges.
-
-State and dependencies live **entirely on the tracker** (issues, labels, the run-log) — this runbook
-reads nothing local for state.
+An **AFK build loop** that N people run **simultaneously** on separate machines without colliding —
+**each tracker issue is the lock**. Each iteration is a **fresh headless session**: a thin
+orchestrator that claims one ready issue, delegates the build to a fresh `/implement` sub-agent,
+opens an MR that `Closes #N`, and stops. **The human is the merge gate.**
 
 > **The queue:** OPEN issues labeled **`$READY_LABEL`** (in `plans/loop.config.sh`, matches what
 > `/to-tickets` applies) whose every `deps` blocker is closed. **Run-log:** the newest OPEN issue
@@ -24,18 +20,16 @@ reads nothing local for state.
 ## Per-repo judgment — the repo's own CLAUDE.md
 Everything that is *project judgment* (build constraints, review lenses, merge hotspots, CI policy)
 lives in the target repo's own CLAUDE.md, which every fresh session — orchestrator and sub-agent —
-reads anyway. `/implement` reads it too. This skeleton carries only the backend/project-neutral state
-machine; it has **no** per-repo recipe or scope files.
+reads anyway. This skeleton carries only the backend/project-neutral state machine.
 
-## Run it (every runner runs this — self-paced, context-bounded)
+## Run it (every runner runs this — self-paced)
 ```
 ./plans/run-loop.sh                                       # defaults to this skeleton
 REVIEW_RESPONSE=off ./plans/run-loop.sh                   # never auto-address review feedback (pure human gate)
 TRACKER_BACKEND=gitlab ./plans/run-loop.sh               # different tracker backend
 ```
-`run-loop.sh` locates the installed loop-kit skill, points RUNBOOK at this skeleton, and spawns a
-**fresh headless `claude -p` per iteration** (empty context; all state is on the tracker, so each
-session re-derives it). No per-loop script.
+`run-loop.sh` locates the installed loop-kit skill, points RUNBOOK at this skeleton, and spawns the
+fresh session per iteration. No per-loop script.
 
 **Tracker interface (backend-agnostic).** This runbook NEVER calls `gh`/`glab` directly — it calls
 verbs through `"${LOOP_KIT_DIR:?run via ./plans/run-loop.sh, or export LOOP_KIT_DIR}"/track <verb>`,
@@ -44,10 +38,11 @@ the kit's REFERENCE.md. Verbs used below: `sync-list`, `runlog-tail`, `view`, `i
 `reconcile-mine`, `branch-merged`, `claim`→`won|lost`, `claim-owner`, `whoami`, `release`, `close`,
 `mark-review`, `log`, `open-pr`, `reviews-pending`, `review-read`, `review-reply`, `caps`.
 
-**Precondition (multi-runner):** each runner's tracker CLI is authed as a **distinct user** — the
-*assignee* is the lock that tells runners apart. One shared account → run **single-runner**. (Backend
-note: on **GitLab** Free / single-assignee instances set `CLAIM_STRATEGY=note` for the note-marker CAS;
-on **GitHub** there is no shared-account fallback — use N distinct logins or run single-runner.)
+**Precondition (multi-runner):** every runner needs a **distinct claimant identity**. Default: each
+runner's tracker CLI is authed as a **distinct user** — the *assignee* is the lock that tells
+runners apart. To run N agents under ONE login — or on a single-assignee GitLab tier (Free / many
+self-hosted) — set `CLAIM_STRATEGY=note` (the note-marker CAS) and give each agent a stable,
+distinct **`RUNNER_ID`** (note mode refuses to claim without one). Lock contract: REFERENCE.md.
 
 Each session runs **exactly one** orchestrator iteration, then prints a status sentinel:
 
@@ -57,20 +52,12 @@ Each session runs **exactly one** orchestrator iteration, then prints a status s
 | `LOOP_STATUS=COMPLETE` | nothing pickable — queue empty or every remaining issue is gated on an unmerged MR / another runner | post the handoff summary, stop |
 | `LOOP_STATUS=BLOCKED` | a human decision/input is needed | stop with a non-zero code |
 
-> **`WAIT` is retired from this skeleton's vocabulary.** In MR-only mode nothing unblocks without the
-> human merging, so a starved queue is `COMPLETE` (with a handoff summary), never a polling `WAIT`.
-> The driver may still *understand* `WAIT` for compatibility, but the runbook never emits it.
-
-> ⚠️ The driver runs `bypassPermissions`. The loop pushes branches and opens PRs/MRs unattended, but
-> **never merges** — the human is always the merge gate. See the safety notes atop the kit's
-> `loop-drive.sh`.
+> ⚠️ The driver runs `bypassPermissions` — the loop pushes branches and opens MRs unattended. See
+> the safety notes atop the kit's `loop-drive.sh`.
 
 ---
 
 ## Architecture — why context stays flat
-**Two tiers. Each iteration is a fresh ORCHESTRATOR session that holds almost nothing; the issue is
-built by a FRESH `/implement` sub-agent whose context is discarded when it returns — and the driver
-discards the orchestrator session too, after one iteration.**
 
 ```
 ORCHESTRATOR (one fresh driver-spawned session per iteration — thin, short-lived, STATELESS)
@@ -86,19 +73,10 @@ Two rules make this work:
    the human resume trail, read at SYNC (last 1–2 entries) and written at LOG. This is what makes the
    loop fully **resumable** after a crash/restart/summarization.
 2. **The brief passed to the sub-agent is minimal** — worktree path, branch, issue id, repo. The
-   sub-agent fetches its own acceptance criteria (`track view N`); the orchestrator never reads
-   source/diffs/test output. The **push and MR are the orchestrator's job, not the sub-agent's** — so
-   the implementation context is gone before the bookkeeping tail runs and there is always room for it.
-
-> Orchestrator hygiene: don't read whole plan files or large diffs yourself — `"$LOOP_KIT_DIR"/track
-> view N` for the small stuff, and let the sub-agent do the heavy reading.
-
----
-
-## Scope — the queue
-- **Target:** OPEN issues labeled **`$READY_LABEL`** whose every `deps` blocker is closed.
-- **Out of scope:** issues without `$READY_LABEL`. The loop only consumes the queue; authoring the
-  backlog (`/to-tickets` or the tracker UI) is a separate, human-gated step.
+   sub-agent fetches its own acceptance criteria (`track view N`) and does the heavy reading; the
+   orchestrator never reads source/diffs/test output or whole plan files (`"$LOOP_KIT_DIR"/track view N`
+   for the small stuff). The **push and MR are the orchestrator's job, not the sub-agent's** — so the
+   implementation context is gone before the bookkeeping tail runs and there is always room for it.
 
 ## The shared lock — how runners don't collide
 - **Per-issue lock** = `assignee` + in-progress label. Claim before building; release on abort.
@@ -215,7 +193,7 @@ Two rules make this work:
 ### Review-responder sub-agent brief (only when `reviews-pending` flags #N)
 > A human left review feedback on the MR for issue **#N** of `<REPO>`. Address it to *merge-ready, still
 > NOT merged*. Read the repo's CLAUDE.md for the build constraints, review lenses, and merge-hotspot
-> rules — trust it and minimal-change discipline; there are no loop recipe/scope files. Steps:
+> rules; keep minimal-change discipline. Steps:
 > (1) `"$LOOP_KIT_DIR"/track review-read N` → `{pr, branch, base, url, items[]}`. Each **item** is either
 > a `kind:"thread"` (an inline review thread: `path`, `line`, the `conversation`, and a `reply_to` token)
 > or a `kind:"comment"` (MR-conversation feedback, `reply_to:"conversation"`). (2) Check out `branch` and
@@ -231,12 +209,11 @@ Two rules make this work:
 
 ---
 
-## Run-log = the newest OPEN issue labeled `$RUNLOG_LABEL`
-Append every iteration entry via `"$LOOP_KIT_DIR"/track log "…"`, and **read its last 1–2 entries at
-SYNC** via `"$LOOP_KIT_DIR"/track runlog-tail 2` to recover the resume trail — most importantly a
-trailing `BLOCKED` entry's `Unblock-when:` condition, which RECONCILE (2a) re-tests before touching the
-issue. The verbs resolve the log **by label** (auto-creating it on first use — no fixed id in config).
-Per-item state lives on the individual issues; the run-log is the chronological log only.
+## Run-log
+The verbs resolve the run-log **by label** (the newest OPEN issue labeled `$RUNLOG_LABEL`,
+auto-created on first use — no fixed id in config). Per-item state lives on the individual issues;
+the run-log is the chronological trail only — written at LOG, read at SYNC (`runlog-tail 2`), and
+re-tested by RECONCILE (2a) when the trailing entry is a `BLOCKED` with its `Unblock-when:` condition.
 
 ## Stop conditions — don't confuse "starved" with "done"; in MR-only mode both are `COMPLETE`
 - **Work done this iteration → `CONTINUE`.** A build MR'd, a reconcile finished, or review feedback
@@ -246,8 +223,8 @@ Per-item state lives on the individual issues; the run-log is the chronological 
   Post a **handoff summary** to the run-log naming the open MRs and what they block —
   `"$LOOP_KIT_DIR"/track log "done for now: 3 MRs open (#12 #14 #15), 2 tickets blocked on them (#16
   #17)"` — then emit `COMPLETE`. Rationale: in MR-only mode nothing unblocks without the human merging,
-  so polling buys nothing while AFK. **This is why `WAIT` is gone** — a starved queue is not a
-  sleep-and-retry, it is a handoff back to the human.
+  so polling buys nothing while AFK — a starved queue is not a sleep-and-retry, it is a handoff back
+  to the human.
 - **Human decision needed → `BLOCKED` (re-checkable).** Record it via `"$LOOP_KIT_DIR"/track log "…
   Unblock-when: <concrete condition>"`, **leave the claim intact** (resumable — the next session's
   RECONCILE 2a re-tests the condition), emit `BLOCKED`.
