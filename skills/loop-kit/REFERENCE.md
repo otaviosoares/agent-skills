@@ -24,7 +24,8 @@ Two invariants make it resumable after any crash/restart/summarization:
 
 ### The `LOOP_STATUS` sentinel (the driver's only input from the agent)
 - `CONTINUE` — did a unit of work; pickable work likely remains → fire the next fresh session.
-- `WAIT` — work remains but nothing pickable now (a dep is in-flight on another runner) → sleep, re-run.
+- `WAIT` — *driver compat only; the skeleton never emits it* (in MR-only mode a starved queue is
+  `COMPLETE` — nothing unblocks without the human merging, so sleeping buys nothing) → sleep, re-run.
 - `COMPLETE` — nothing left → exit 0.
 - `BLOCKED` — a human decision/input is needed → exit 2.
 - *(implicit)* INTERRUPTED — non-zero exit + no sentinel → state UNKNOWN; the driver backs off and
