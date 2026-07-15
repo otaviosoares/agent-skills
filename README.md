@@ -35,6 +35,14 @@ Best for ~6+ decisions with real tradeoffs; for one or two quick questions your
 agent should just ask inline. See the [skill README](skills/decision-reviewer)
 for the format and workflow.
 
+### [land](skills/land)
+
+Post-merge worktree cleanup. Right after an MR merges, `land` verifies the merge
+(via `glab`), fast-forwards the default branch, removes the worktree, and deletes
+the local branch — refusing anything ambiguous or unmerged, with no `--force`
+paths. The natural bookend to loop-kit's worktree-per-issue flow: `/land`,
+`/land 76`, or `/land -n` for a dry run. See the [skill](skills/land).
+
 ### [loop-kit](skills/loop-kit)
 
 Set up and run a context-bounded, multi-runner autonomous build loop driven by
