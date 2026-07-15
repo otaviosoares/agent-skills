@@ -17,6 +17,17 @@ set -euo pipefail
 
 die() { printf 'land: %s\n' "$*" >&2; exit 1; }
 
+# True if $1 is this process or one of its ancestors — i.e. the claude
+# session that locked the worktree is the very session running this script.
+pid_is_ancestor() {
+  local p=$$
+  while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null; do
+    [ "$p" = "$1" ] && return 0
+    p=$(ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ')
+  done
+  return 1
+}
+
 usage() {
   sed -n '2,16s/^# \{0,1\}//p' "$0"
 }
@@ -89,21 +100,24 @@ fetch_pr() {
 WT_PATHS=()
 WT_BRANCHES=()
 WT_STATES=()   # ok | detached | locked
-cur_path="" cur_branch="" cur_state="ok"
+WT_REASONS=()  # lock reason, if any
+cur_path="" cur_branch="" cur_state="ok" cur_reason=""
 flush_entry() {
   if [ -n "$cur_path" ] && [ "$cur_path" != "$MAIN" ]; then
     WT_PATHS+=("$cur_path")
     WT_BRANCHES+=("$cur_branch")
     WT_STATES+=("$cur_state")
+    WT_REASONS+=("$cur_reason")
   fi
-  cur_path="" cur_branch="" cur_state="ok"
+  cur_path="" cur_branch="" cur_state="ok" cur_reason=""
 }
 while IFS= read -r line; do
   case "$line" in
     "worktree "*) cur_path=${line#worktree } ;;
     "branch refs/heads/"*) cur_branch=${line#branch refs/heads/} ;;
     detached) cur_state="detached" ;;
-    locked*) cur_state="locked" ;;
+    "locked "*) cur_state="locked"; cur_reason=${line#locked } ;;
+    locked) cur_state="locked" ;;
     "") flush_entry ;;
   esac
 done < <(git -C "$MAIN" worktree list --porcelain; echo)
@@ -111,7 +125,7 @@ flush_entry
 
 # ---- resolve the target -----------------------------------------------------
 # An explicit argument always wins over "which worktree am I standing in".
-WT_PATH="" BRANCH="" WT_STATE=""
+WT_PATH="" BRANCH="" WT_STATE="" WT_REASON=""
 if [ -n "$TARGET" ]; then
   target_abs=$(cd "$TARGET" 2>/dev/null && pwd || true)
   match=-1
@@ -119,7 +133,7 @@ if [ -n "$TARGET" ]; then
     for ((i = 0; i < ${#WT_PATHS[@]}; i++)); do
       p=${WT_PATHS[$i]} b=${WT_BRANCHES[$i]}
       hit=false
-      [ "$p" = "$TARGET" ] || [ "$p" = "$target_abs" ] || [ "$p" = "$MAIN-$TARGET" ] && hit=true
+      [ "$p" = "$TARGET" ] || [ "$p" = "$target_abs" ] || [ "$p" = "$MAIN-$TARGET" ] || [ "$(basename "$p")" = "$TARGET" ] && hit=true
       [ -n "$b" ] && { [ "$b" = "$TARGET" ] && hit=true; case "$b" in */"$TARGET"-*|"$TARGET"-*) hit=true ;; esac; }
       if $hit; then
         [ "$match" -ge 0 ] && [ "$match" != "$i" ] && die "'$TARGET' is ambiguous: matches ${WT_PATHS[$match]} and $p"
@@ -128,11 +142,14 @@ if [ -n "$TARGET" ]; then
     done
   fi
   if [ "$match" -ge 0 ]; then
-    WT_PATH=${WT_PATHS[$match]} BRANCH=${WT_BRANCHES[$match]} WT_STATE=${WT_STATES[$match]}
+    WT_PATH=${WT_PATHS[$match]} BRANCH=${WT_BRANCHES[$match]} WT_STATE=${WT_STATES[$match]} WT_REASON=${WT_REASONS[$match]}
   else
     # No worktree — maybe a leftover branch from an interrupted run.
     candidates=$(git -C "$MAIN" for-each-ref --format='%(refname:short)' \
       "refs/heads/$TARGET" "refs/heads/*/$TARGET-*" "refs/heads/$TARGET-*" | sort -u)
+    if git -C "$MAIN" show-ref --verify -q "refs/heads/$TARGET"; then
+      candidates=$TARGET   # an exact branch name beats prefix matches
+    fi
     count=$(printf '%s' "$candidates" | grep -c . || true)
     [ "$count" -eq 0 ] && die "nothing matches '$TARGET' — no worktree, no branch"
     [ "$count" -gt 1 ] && die "'$TARGET' is ambiguous between branches:
@@ -149,7 +166,7 @@ else
   if [ "${#WT_PATHS[@]}" -gt 0 ]; then
     for ((i = 0; i < ${#WT_PATHS[@]}; i++)); do
       if [ "${WT_PATHS[$i]}" = "$WT_PATH" ]; then
-        BRANCH=${WT_BRANCHES[$i]} WT_STATE=${WT_STATES[$i]}
+        BRANCH=${WT_BRANCHES[$i]} WT_STATE=${WT_STATES[$i]} WT_REASON=${WT_REASONS[$i]}
       fi
     done
   fi
@@ -157,9 +174,37 @@ else
 fi
 
 # ---- safety gates (all before anything destructive) -------------------------
+# Locks: Claude Code locks a worktree while a session works in it, stamping
+# "claude session <name> (pid N ...)" as the reason. If that pid is gone (or
+# was recycled by a non-claude process) the lock is stale — the merge/dirt
+# gates below still protect the content, so unlock and continue. A live
+# claude pid, or any lock we can't attribute, still refuses.
+NEED_UNLOCK=false
 if [ -n "$WT_PATH" ]; then
   [ "$WT_STATE" = "detached" ] && die "$WT_PATH has a detached HEAD (mid-rebase/bisect?) — resolve it manually"
-  [ "$WT_STATE" = "locked" ] && die "$WT_PATH is locked — 'git worktree unlock $WT_PATH' first if you're sure"
+  if [ "$WT_STATE" = "locked" ]; then
+    lock_pid=$(printf '%s' "$WT_REASON" | sed -nE 's/^claude session .*\(pid ([0-9]+)[ )].*/\1/p')
+    if [ -z "$lock_pid" ]; then
+      die "$WT_PATH is locked (reason: ${WT_REASON:-none given}) — 'git worktree unlock $WT_PATH' first if you're sure"
+    fi
+    lock_cmd=$(ps -p "$lock_pid" -o command= 2>/dev/null || true)
+    case "$lock_cmd" in
+      *claude*)
+        if pid_is_ancestor "$lock_pid"; then
+          # Landing from inside your own worktree: the locking session is the
+          # one running this script. Unlocking your own lock overrides nobody;
+          # the merge/dirt gates below still decide whether removal happens.
+          printf 'Lock is held by this session (pid %s) — will unlock before removal\n' "$lock_pid"
+        else
+          die "$WT_PATH is locked by a live claude session (pid $lock_pid) — end that session and re-run, or 'git worktree unlock $WT_PATH' if you're sure it's only idling"
+        fi
+        ;;
+      *)
+        printf 'Lock is stale (claude session pid %s is gone) — will unlock before removal\n' "$lock_pid"
+        ;;
+    esac
+    NEED_UNLOCK=true
+  fi
   [ -n "$BRANCH" ] || die "cannot determine the branch checked out in $WT_PATH"
 fi
 
@@ -195,20 +240,37 @@ fetch_pr "$BRANCH"
 [ "$PR_STATE" = "merged" ] || die "$PR $SIGIL$PR_NUM for '$BRANCH' is '$PR_STATE', not merged"
 
 TIP=$(git -C "$MAIN" rev-parse "refs/heads/$BRANCH")
+DELETE_WHY=""
 if git -C "$MAIN" merge-base --is-ancestor "$TIP" "origin/$DEFAULT_BRANCH"; then
   DELETE_FLAG="-d"    # tip fully contained in the default branch (normal merge commit)
 elif [ "$TIP" = "$PR_SHA" ]; then
   DELETE_FLAG="-D"    # tip is exactly the merged PR/MR head → squash or rebase merge
+  DELETE_WHY="branch tip $(git -C "$MAIN" rev-parse --short "$TIP") is exactly what $PR $SIGIL$PR_NUM merged"
 else
-  # Local commits beyond what the PR/MR merged — deleting would orphan them.
-  die "local '$BRANCH' has commits beyond merged $PR $SIGIL$PR_NUM — push or salvage them first:
-$(git -C "$MAIN" log --oneline "origin/$DEFAULT_BRANCH..refs/heads/$BRANCH")"
+  # SHA lineage can't account for the tip — rebase-before-merge and multi-
+  # commit squashes rewrite it on the server. Fall back to content: merge the
+  # branch into origin/<default> in memory; if the result IS origin/<default>'s
+  # tree, the branch holds nothing that hasn't already landed. Any genuinely
+  # unmerged change yields a different tree (or a conflict) and still refuses.
+  main_tree=$(git -C "$MAIN" rev-parse "origin/$DEFAULT_BRANCH^{tree}")
+  merged_tree=$(git -C "$MAIN" merge-tree --write-tree "origin/$DEFAULT_BRANCH" "$TIP" 2>/dev/null | head -n1) || merged_tree=""
+  if [ -n "$merged_tree" ] && [ "$merged_tree" = "$main_tree" ]; then
+    DELETE_FLAG="-D"
+    DELETE_WHY="merging '$BRANCH' into origin/$DEFAULT_BRANCH changes nothing — its content already landed via $PR $SIGIL$PR_NUM"
+  else
+    # Content genuinely beyond the merge — deleting would orphan it.
+    die "local '$BRANCH' has content beyond merged $PR $SIGIL$PR_NUM — push or salvage it first (+ = patch not found upstream):
+$(git -C "$MAIN" cherry -v "origin/$DEFAULT_BRANCH" "refs/heads/$BRANCH")"
+  fi
 fi
 printf '%s %s%s is merged; local tip accounted for.\n' "$PR" "$SIGIL" "$PR_NUM"
 
 # ---- do it -------------------------------------------------------------------
 run git -C "$MAIN" pull --ff-only origin "$DEFAULT_BRANCH"
 if [ -n "$WT_PATH" ]; then
+  if $NEED_UNLOCK; then
+    run git -C "$MAIN" worktree unlock "$WT_PATH"
+  fi
   if [ -n "$DS_JUNK" ] && [ "$STALE" = false ]; then
     run find "$WT_PATH" -name .DS_Store -delete
   fi
@@ -216,7 +278,7 @@ if [ -n "$WT_PATH" ]; then
 fi
 run git -C "$MAIN" branch "$DELETE_FLAG" "$BRANCH"
 if [ "$DELETE_FLAG" = "-D" ]; then
-  printf '(-D was safe: branch tip %.7s is exactly what %s %s%s merged)\n' "$TIP" "$PR" "$SIGIL" "$PR_NUM"
+  printf '(-D was safe: %s)\n' "$DELETE_WHY"
 fi
 
 # ---- report ------------------------------------------------------------------

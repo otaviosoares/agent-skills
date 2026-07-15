@@ -33,3 +33,10 @@ the worktree the session is in. Add `-n` if the user asked for a dry run:
   safety model — never retry with `--force`, delete branches manually, or
   otherwise work around them. If the user wants to override, they do it by
   hand.
+- Locked worktrees: the script unlocks stale claude-session locks (holder
+  pid gone) and self-held locks (the session running land is the one that
+  locked the worktree — landing from inside it) by itself. If it refuses
+  because a **different** live claude session holds the lock, tell the user
+  which pid — the fix is to close that session (e.g. its cmux pane) and
+  re-run; only they decide whether to `git worktree unlock` a session
+  that's still open.
